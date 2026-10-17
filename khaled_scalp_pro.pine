@@ -1,0 +1,387 @@
+//@version=6
+// Khaled Scalp Pro — per-market scalping presets with money management and a daily dashboard.
+// Two strategies:
+//   • Pullback: EMA trend + pullback to the slow EMA + momentum candle (gold, Nasdaq, Bitcoin)
+//   • ORB: breakout of the session's opening range (Dow, silver)
+// Signals are confirmed on bar close (no repaint). Every trade is tracked in R (1R = the stop
+// distance = the amount risked) after costs, and the day stops once the daily target, the
+// daily max loss or the max number of trades is reached.
+// Presets were chosen with backtest/backtest.py on Yahoo data and checked on an unseen period.
+indicator("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ───────────── Preset ─────────────
+grpP = "Market preset"
+presetIn = input.string("Auto", "Preset", options = ["Auto", "Gold", "Nasdaq", "Dow", "Silver", "Bitcoin", "Custom"], group = grpP,
+     tooltip = "Auto picks the preset from the chart symbol (XAUUSD/GC, NAS100/NQ, US30/YM, XAGUSD/SI, BTC). Custom uses the settings below.")
+
+grpM = "Money management"
+accountSize    = input.float(10000, "Account size ($)", minval = 1, group = grpM)
+riskPct        = input.float(1.0, "Risk per trade (%)", minval = 0.01, step = 0.25, group = grpM)
+dailyTargetPct = input.float(2.0, "Daily target (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
+dailyLossPct   = input.float(2.0, "Daily max loss (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
+maxTradesIn    = input.int(-1, "Max trades per day (-1 = preset, 0 = off)", minval = -1, group = grpM)
+pointValueIn   = input.float(0, "Value of 1.0 price move per 1 qty ($, 0 = symbol)", minval = 0, group = grpM,
+     tooltip = "Used for the position size. 0 uses the symbol's point value (futures: contract multiplier, CFD/spot: usually 1 = one unit).")
+costIn         = input.float(-1, "Round-trip cost in price (-1 = preset)", group = grpM,
+     tooltip = "Spread + commission + slippage per trade, in price units. Stats on the dashboard are after this cost.")
+
+grpC = "Custom settings (Preset = Custom)"
+stratIn     = input.string("Pullback", "Strategy", options = ["Pullback", "ORB"], group = grpC)
+sessIn      = input.string("All", "Session", options = ["All", "Asia", "London", "New York", "NY Cash"], group = grpC)
+tpIn        = input.float(1.5, "Pullback: take profit (x ATR)", minval = 0.1, step = 0.1, group = grpC)
+slIn        = input.float(1.0, "Pullback: stop loss (x ATR)", minval = 0.1, step = 0.1, group = grpC)
+pullbackIn  = input.int(3, "Pullback: lookback (bars)", minval = 1, group = grpC)
+minAtrIn    = input.float(0.7, "Pullback: min ATR vs its 50-bar average", minval = 0, step = 0.05, group = grpC)
+useHtfIn    = input.bool(false, "Pullback: higher-timeframe filter", group = grpC)
+htfIn       = input.timeframe("15", "Pullback: HTF timeframe", group = grpC)
+orbMinIn    = input.int(30, "ORB: opening range (minutes)", minval = 1, group = grpC)
+orbStopIn   = input.string("Range", "ORB: stop at", options = ["Range", "Mid"], group = grpC)
+orbTpIn     = input.float(2.0, "ORB: take profit (x risk)", minval = 0.1, step = 0.1, group = grpC)
+orbTrendIn  = input.bool(false, "ORB: only with the trend EMA", group = grpC)
+maxBarsIn   = input.int(20, "Max bars in trade (0 = off)", minval = 0, group = grpC)
+costCustom  = input.float(0, "Round-trip cost in price", minval = 0, group = grpC)
+
+grpI = "Indicator"
+fastLen     = input.int(9, "Fast EMA", minval = 1, group = grpI)
+slowLen     = input.int(21, "Slow EMA", minval = 1, group = grpI)
+trendLen    = input.int(50, "Trend EMA", minval = 1, group = grpI)
+htfLen      = input.int(50, "HTF EMA length", minval = 1, group = grpI)
+rsiLen      = input.int(7, "RSI length", minval = 2, group = grpI)
+rsiPullLow  = input.int(40, "RSI pullback level (long)", minval = 1, maxval = 50, group = grpI)
+rsiPullHigh = input.int(60, "RSI pullback level (short)", minval = 50, maxval = 99, group = grpI)
+useVwap     = input.bool(true, "VWAP filter (ignored if no volume)", group = grpI)
+atrLen      = input.int(14, "ATR length", minval = 1, group = grpI)
+cooldown    = input.int(0, "Cooldown bars after a trade", minval = 0, group = grpI)
+
+grpD = "Display"
+showLevels = input.bool(true, "Show TP / SL lines", group = grpD)
+showSessBg = input.bool(true, "Shade the trading session", group = grpD)
+dashPosIn  = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = grpD)
+
+// ───────────── Resolve the preset ─────────────
+tk = str.upper(syminfo.ticker)
+rt = str.upper(syminfo.root)
+detected = str.contains(tk, "BTC") or str.contains(tk, "XBT") ? "Bitcoin" :
+     str.contains(tk, "XAU") or str.contains(tk, "GOLD") or rt == "GC" or rt == "MGC" ? "Gold" :
+     str.contains(tk, "XAG") or str.contains(tk, "SILVER") or rt == "SI" or rt == "SIL" ? "Silver" :
+     str.contains(tk, "NAS") or str.contains(tk, "US100") or str.contains(tk, "USTEC") or str.contains(tk, "NDX") or rt == "NQ" or rt == "MNQ" ? "Nasdaq" :
+     str.contains(tk, "US30") or str.contains(tk, "DJ") or str.contains(tk, "WS30") or rt == "YM" or rt == "MYM" ? "Dow" : "Custom"
+preset = presetIn == "Auto" ? detected : presetIn
+
+stratName = switch preset
+    "Dow"    => "ORB"
+    "Silver" => "ORB"
+    "Custom" => stratIn
+    => "Pullback"
+sessName = switch preset
+    "Dow"    => "New York"
+    "Silver" => "London"
+    "Custom" => stratName == "ORB" and sessIn == "All" ? "New York" : sessIn
+    => "All"
+recTf = switch preset
+    "Gold"    => "3"
+    "Nasdaq"  => "5"
+    "Dow"     => "5"
+    "Silver"  => "5"
+    "Bitcoin" => "15"
+    => timeframe.period
+tpMult = switch preset
+    "Gold"    => 1.5
+    "Nasdaq"  => 1.5
+    "Bitcoin" => 3.0
+    => tpIn
+slMult = switch preset
+    "Gold"    => 1.5
+    "Nasdaq"  => 1.5
+    "Bitcoin" => 1.5
+    => slIn
+pullbackBars = switch preset
+    "Gold"    => 5
+    "Nasdaq"  => 3
+    "Bitcoin" => 5
+    => pullbackIn
+minAtrRatio = switch preset
+    "Gold"    => 0.7
+    "Nasdaq"  => 0.7
+    "Bitcoin" => 0.0
+    => minAtrIn
+useHtf = switch preset
+    "Nasdaq"  => true
+    "Custom"  => useHtfIn
+    => false
+htfTf = switch preset
+    "Custom" => htfIn
+    "Bitcoin" => "60"
+    => "15"
+orbMinutes = switch preset
+    "Dow"    => 30
+    "Silver" => 30
+    => orbMinIn
+orbStop = switch preset
+    "Dow"    => "Range"
+    "Silver" => "Mid"
+    => orbStopIn
+orbTp = switch preset
+    "Dow"    => 3.0
+    "Silver" => 1.5
+    => orbTpIn
+orbTrend = switch preset
+    "Dow"    => true
+    "Silver" => false
+    => orbTrendIn
+maxBars = preset == "Custom" ? maxBarsIn : stratName == "ORB" ? 0 : 20
+maxTradesPreset = stratName == "ORB" and preset != "Custom" ? 1 : 0
+maxTrades = maxTradesIn >= 0 ? maxTradesIn : maxTradesPreset
+presetCost = switch preset
+    "Gold"    => 0.25
+    "Nasdaq"  => 0.75
+    "Dow"     => 2.0
+    "Silver"  => 0.012
+    "Bitcoin" => 15.0
+    => costCustom
+cost = costIn >= 0 ? costIn : presetCost
+isOrb = stratName == "ORB"
+
+// Sessions (same definitions as backtest/backtest.py)
+sessSpec = switch sessName
+    "Asia"     => "0900-1500"
+    "London"   => "0800-1200"
+    "New York" => "0830-1200"
+    "NY Cash"  => "0930-1600"
+    => "0000-0000"
+sessTz = switch sessName
+    "Asia"   => "Asia/Tokyo"
+    "London" => "Europe/London"
+    => "America/New_York"
+inSess  = sessName == "All" ? true : not na(time(timeframe.period, sessSpec + ":1234567", sessTz))
+newSess = sessName != "All" and inSess and not inSess[1]
+utcDay  = math.floor(time / 86400000)
+newDay  = sessName == "All" ? utcDay != utcDay[1] : newSess
+
+// ───────────── Calculations ─────────────
+emaF = ta.ema(close, fastLen)
+emaS = ta.ema(close, slowLen)
+emaT = ta.ema(close, trendLen)
+rsi  = ta.rsi(close, rsiLen)
+atr  = ta.atr(atrLen)
+vwapVal = ta.vwap(hlc3)
+
+// Non-repainting HTF values (previous closed HTF bar)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1], lookahead = barmerge.lookahead_on)
+htfClose = request.security(syminfo.tickerid, htfTf, close[1], lookahead = barmerge.lookahead_on)
+htfUp    = not useHtf or htfClose > htfEma
+htfDown  = not useHtf or htfClose < htfEma
+
+trendUp   = emaF > emaS and emaS > emaT and close > emaT and htfUp
+trendDown = emaF < emaS and emaS < emaT and close < emaT and htfDown
+
+pulledLong  = nz(ta.barssince(low <= emaS), 9999) <= pullbackBars and ta.lowest(rsi, pullbackBars) < rsiPullLow
+pulledShort = nz(ta.barssince(high >= emaS), 9999) <= pullbackBars and ta.highest(rsi, pullbackBars) > rsiPullHigh
+trigLong  = close > emaF and close > open and close > high[1] and rsi > 50 and rsi < 80
+trigShort = close < emaF and close < open and close < low[1] and rsi < 50 and rsi > 20
+vwapOkLong  = not useVwap or na(vwapVal) or close > vwapVal
+vwapOkShort = not useVwap or na(vwapVal) or close < vwapVal
+volOk = atr >= ta.sma(atr, 50) * minAtrRatio
+
+pbLong  = not isOrb and trendUp and pulledLong and trigLong and vwapOkLong and volOk
+pbShort = not isOrb and trendDown and pulledShort and trigShort and vwapOkShort and volOk
+
+// Opening range of the session
+var float orbHi = na
+var float orbLo = na
+var int   sessStart = na
+if newSess
+    sessStart := time
+    orbHi := na
+    orbLo := na
+inRangeWin = inSess and not na(sessStart) and time < sessStart + orbMinutes * 60000
+if inRangeWin
+    orbHi := na(orbHi) ? high : math.max(orbHi, high)
+    orbLo := na(orbLo) ? low : math.min(orbLo, low)
+orbReady = inSess and not na(sessStart) and time >= sessStart + orbMinutes * 60000 and not na(orbHi)
+orbMid   = (orbHi + orbLo) / 2
+orbLong  = isOrb and orbReady and close > orbHi and close[1] <= orbHi and (not orbTrend or close > emaT)
+orbShort = isOrb and orbReady and close < orbLo and close[1] >= orbLo and (not orbTrend or close < emaT)
+
+// ───────────── Trade + money management ─────────────
+pointValue = pointValueIn > 0 ? pointValueIn : syminfo.pointvalue
+targetR    = dailyTargetPct > 0 ? dailyTargetPct / riskPct : 0.0
+lossR      = dailyLossPct > 0 ? dailyLossPct / riskPct : 0.0
+
+var int   dir       = 0
+var float entry     = na
+var float tp        = na
+var float sl        = na
+var float riskDist  = na
+var float riskCash  = na
+var float qty       = na
+var int   entryBar  = na
+var int   entryDay  = na
+var int   lastExit  = -100000
+var line  tpLine    = na
+var line  slLine    = na
+
+var int   wins      = 0
+var int   losses    = 0
+var float grossWin  = 0.0
+var float grossLoss = 0.0
+var float netR      = 0.0
+var float peakR     = 0.0
+var float maxDdR    = 0.0
+var float pnlCash   = 0.0
+
+var int   dayId     = 0
+var float dayR      = 0.0
+var float dayCash   = 0.0
+var int   dayTrades = 0
+var bool  dayDone   = false
+var string dayWhy   = ""
+var int   daysTotal = 0
+var int   daysGreen = 0
+var int   daysTarget = 0
+
+if newDay
+    if dayTrades > 0
+        daysTotal += 1
+        daysGreen += dayR > 0 ? 1 : 0
+        daysTarget += dayWhy == "TARGET" ? 1 : 0
+    dayId     += 1
+    dayR      := 0.0
+    dayCash   := 0.0
+    dayTrades := 0
+    dayDone   := false
+    dayWhy    := ""
+
+// 1) Manage the open trade (from the bar after entry)
+if dir != 0 and bar_index > entryBar
+    hitSL    = dir == 1 ? low <= sl : high >= sl
+    hitTP    = dir == 1 ? high >= tp : low <= tp
+    timedOut = maxBars > 0 and bar_index - entryBar >= maxBars
+    sessOut  = not inSess
+    if showLevels
+        line.set_x2(tpLine, bar_index)
+        line.set_x2(slLine, bar_index)
+    if hitSL or hitTP or timedOut or sessOut
+        // SL and TP inside one bar counts as a loss (conservative)
+        exitPx = hitSL ? sl : hitTP ? tp : sessOut ? open : close
+        r = ((exitPx - entry) * dir - cost) / riskDist
+        cash = r * riskCash
+        netR    += r
+        pnlCash += cash
+        peakR   := math.max(peakR, netR)
+        maxDdR  := math.max(maxDdR, peakR - netR)
+        if r > 0
+            wins += 1
+            grossWin += r
+        else
+            losses += 1
+            grossLoss -= r
+        label.new(bar_index, dir == 1 ? high : low, (r >= 0 ? "+" : "") + str.tostring(r, "#.##") + "R",
+             style = label.style_none, textcolor = r > 0 ? color.lime : color.red, size = size.small)
+        if entryDay == dayId
+            dayR    += r
+            dayCash += cash
+            if targetR > 0 and dayR >= targetR
+                dayDone := true
+                dayWhy  := "TARGET"
+            else if lossR > 0 and dayR <= -lossR
+                dayDone := true
+                dayWhy  := "MAX LOSS"
+            else if maxTrades > 0 and dayTrades >= maxTrades
+                dayDone := true
+                dayWhy  := "MAX TRADES"
+            if dayDone
+                alert("KScalp " + syminfo.ticker + ": day closed (" + dayWhy + "), P&L " + str.tostring(dayCash, "#.##") + "$", alert.freq_once_per_bar_close)
+        dir      := 0
+        lastExit := bar_index
+
+// 2) New signals — only on confirmed bars, inside the session, flat, and while the day is open
+canTrade = dir == 0 and not dayDone and inSess and bar_index - lastExit > cooldown and barstate.isconfirmed and atr > 0
+longSig  = canTrade and (pbLong or orbLong)
+shortSig = canTrade and not longSig and (pbShort or orbShort)
+
+balance = accountSize + pnlCash
+if longSig or shortSig
+    dir      := longSig ? 1 : -1
+    entry    := close
+    riskDist := isOrb ? (dir == 1 ? close - (orbStop == "Mid" ? orbMid : orbLo) : (orbStop == "Mid" ? orbMid : orbHi) - close) : atr * slMult
+    if riskDist <= 0
+        dir := 0
+    else
+        sl        := close - dir * riskDist
+        tp        := close + dir * (isOrb ? riskDist * orbTp : atr * tpMult)
+        riskCash  := balance * riskPct / 100
+        qty       := riskCash / (riskDist * pointValue)
+        entryBar  := bar_index
+        entryDay  := dayId
+        dayTrades += 1
+        if showLevels
+            tpLine := line.new(bar_index, tp, bar_index + 1, tp, color = color.new(color.lime, 0), style = line.style_dashed)
+            slLine := line.new(bar_index, sl, bar_index + 1, sl, color = color.new(color.red, 0), style = line.style_dashed)
+        alert("KScalp " + (dir == 1 ? "BUY " : "SELL ") + syminfo.ticker + " @ " + str.tostring(close, format.mintick) +
+             " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) +
+             " | Qty " + str.tostring(qty, "#.###") + " | Risk " + str.tostring(riskCash, "#.##") + "$", alert.freq_once_per_bar_close)
+entered = (longSig or shortSig) and dir != 0
+
+// ───────────── Plots ─────────────
+plot(emaF, "Fast EMA", color.new(color.aqua, 0))
+plot(emaS, "Slow EMA", color.new(color.orange, 0))
+plot(emaT, "Trend EMA", color.new(color.gray, 0), 2)
+plot(useVwap and not isOrb ? vwapVal : na, "VWAP", color.new(color.purple, 30), style = plot.style_circles)
+plot(isOrb and orbReady ? orbHi : na, "ORB high", color.new(color.teal, 0), 2, plot.style_linebr)
+plot(isOrb and orbReady ? orbLo : na, "ORB low", color.new(color.maroon, 0), 2, plot.style_linebr)
+
+plotshape(entered and dir == 1, "BUY", shape.labelup, location.belowbar, color.new(color.lime, 0), text = "BUY", textcolor = color.black, size = size.small)
+plotshape(entered and dir == -1, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0), text = "SELL", textcolor = color.white, size = size.small)
+
+bgcolor(showSessBg and sessName != "All" and inSess ? color.new(color.blue, 94) : na)
+
+// ───────────── Dashboard ─────────────
+fMoney(x) => (x >= 0 ? "+$" : "-$") + str.tostring(math.abs(x), "#,##0.00")
+dashPos = switch dashPosIn
+    "Top left"     => position.top_left
+    "Bottom right" => position.bottom_right
+    "Bottom left"  => position.bottom_left
+    => position.top_right
+var table dash = table.new(dashPos, 2, 14, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1)
+fRow(int row, string k, string v, color c) =>
+    table.cell(dash, 0, row, k, text_color = color.silver, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, row, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+
+if barstate.isfirst
+    table.merge_cells(dash, 0, 0, 1, 0)
+
+if barstate.islast
+    tfOk     = timeframe.period == recTf
+    total    = wins + losses
+    winRate  = total > 0 ? wins * 100.0 / total : 0.0
+    pf       = grossLoss > 0 ? grossWin / grossLoss : na
+    status   = dayDone ? (dayWhy == "TARGET" ? "✅ TARGET HIT" : dayWhy == "MAX LOSS" ? "⛔ MAX LOSS" : "⏸ MAX TRADES") :
+         not inSess ? "💤 SESSION CLOSED" : dir != 0 ? "📈 IN TRADE" : "🟢 TRADING"
+    statusC  = dayDone ? (dayWhy == "TARGET" ? color.lime : color.red) : not inSess ? color.gray : color.aqua
+    riskNow  = balance * riskPct / 100
+    nextQty  = not isOrb and atr > 0 ? riskNow / (atr * slMult * pointValue) : na
+    stratTxt = isOrb ? "ORB " + str.tostring(orbMinutes) + "m, TP " + str.tostring(orbTp) + "R" :
+         "Pullback, TP " + str.tostring(tpMult) + " / SL " + str.tostring(slMult) + " ATR"
+    table.cell(dash, 0, 0, "KHALED SCALP PRO", text_color = color.white, text_size = size.normal)
+    fRow(1, "Market", preset + (presetIn == "Auto" ? " (auto)" : ""), color.white)
+    fRow(2, "Strategy", stratTxt, color.white)
+    fRow(3, "Timeframe", tfOk ? timeframe.period + " ✓" : timeframe.period + " → use " + recTf, tfOk ? color.lime : color.orange)
+    fRow(4, "Session", sessName + (sessName == "All" ? "" : inSess ? " (open)" : " (closed)"), inSess ? color.lime : color.gray)
+    fRow(5, "Today", status, statusC)
+    fRow(6, "Today P&L", fMoney(dayCash) + "  (" + str.tostring(dayR, "#.##") + "R, " + str.tostring(dayTrades) + " tr)", dayCash >= 0 ? color.lime : color.red)
+    fRow(7, "Target / max loss", (targetR > 0 ? fMoney(balance * dailyTargetPct / 100) : "off") + " / " + (lossR > 0 ? fMoney(-balance * dailyLossPct / 100) : "off"), color.white)
+    fRow(8, "Risk per trade", "$" + str.tostring(riskNow, "#,##0.00") + " (" + str.tostring(riskPct) + "%)", color.white)
+    fRow(9, dir != 0 ? "Open trade" : "Next size",
+         dir != 0 ? (dir == 1 ? "LONG " : "SHORT ") + str.tostring(qty, "#.###") + " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) :
+         na(nextQty) ? "set at breakout" : str.tostring(nextQty, "#.###") + " qty", color.white)
+    fRow(10, "Balance", "$" + str.tostring(balance, "#,##0.00") + " (" + fMoney(pnlCash) + ")", pnlCash >= 0 ? color.lime : color.red)
+    fRow(11, "Trades / win rate", str.tostring(total) + " / " + str.tostring(winRate, "#.0") + "%", color.white)
+    fRow(12, "Net / PF / max DD", str.tostring(netR, "#.#") + "R / " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " / " + str.tostring(maxDdR, "#.#") + "R",
+         netR >= 0 ? color.lime : color.red)
+    fRow(13, "Green days / target days", str.tostring(daysGreen) + " / " + str.tostring(daysTarget) + " of " + str.tostring(daysTotal), color.white)
+
+// ───────────── Alerts ─────────────
+// For alerts with entry / SL / TP / size use "Any alert() function call". These simple ones carry no levels.
+alertcondition(entered and dir == 1, "KScalp BUY", "KScalp BUY on {{ticker}} @ {{close}}")
+alertcondition(entered and dir == -1, "KScalp SELL", "KScalp SELL on {{ticker}} @ {{close}}")
