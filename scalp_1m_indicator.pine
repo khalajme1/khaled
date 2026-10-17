@@ -1,0 +1,141 @@
+//@version=6
+// Khaled Scalp 1m — trend-pullback scalping indicator for the 1-minute chart.
+// Signals are confirmed on bar close (no repaint). The built-in tracker measures
+// how many signals reached TP before SL so you can tune settings per market.
+indicator("Khaled Scalp 1m", shorttitle = "KScalp", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ───────────── Inputs ─────────────
+grpT = "Trend"
+fastLen  = input.int(9, "Fast EMA", minval = 1, group = grpT)
+slowLen  = input.int(21, "Slow EMA", minval = 1, group = grpT)
+trendLen = input.int(50, "Trend EMA", minval = 1, group = grpT)
+useHtf   = input.bool(true, "Higher-timeframe filter", group = grpT)
+htfTf    = input.timeframe("5", "HTF timeframe", group = grpT)
+htfLen   = input.int(50, "HTF EMA length", minval = 1, group = grpT)
+
+grpE = "Entry"
+rsiLen       = input.int(7, "RSI length", minval = 2, group = grpE)
+rsiPullLow   = input.int(40, "RSI pullback level (long)", minval = 1, maxval = 50, group = grpE)
+rsiPullHigh  = input.int(60, "RSI pullback level (short)", minval = 50, maxval = 99, group = grpE)
+pullbackBars = input.int(5, "Pullback lookback (bars)", minval = 1, group = grpE)
+useVwap      = input.bool(true, "VWAP filter (ignored if no volume)", group = grpE)
+
+grpF = "Filters"
+atrLen      = input.int(14, "ATR length", minval = 1, group = grpF)
+minAtrRatio = input.float(0.7, "Min ATR vs its 50-bar average", minval = 0, step = 0.05, group = grpF)
+cooldown    = input.int(2, "Cooldown bars after a trade", minval = 0, group = grpF)
+
+grpR = "Risk / Tracker"
+tpMult     = input.float(1.0, "Take profit (x ATR)", minval = 0.1, step = 0.1, group = grpR)
+slMult     = input.float(1.5, "Stop loss (x ATR)", minval = 0.1, step = 0.1, group = grpR)
+maxBars    = input.int(20, "Max bars in trade (0 = off)", minval = 0, group = grpR)
+showLevels = input.bool(true, "Show TP / SL lines", group = grpR)
+showPanel  = input.bool(true, "Show stats panel", group = grpR)
+
+// ───────────── Calculations ─────────────
+emaF = ta.ema(close, fastLen)
+emaS = ta.ema(close, slowLen)
+emaT = ta.ema(close, trendLen)
+rsi  = ta.rsi(close, rsiLen)
+atr  = ta.atr(atrLen)
+vwapVal = ta.vwap(hlc3)
+
+// Non-repainting HTF values (previous closed HTF bar)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1], lookahead = barmerge.lookahead_on)
+htfClose = request.security(syminfo.tickerid, htfTf, close[1], lookahead = barmerge.lookahead_on)
+htfUp    = not useHtf or htfClose > htfEma
+htfDown  = not useHtf or htfClose < htfEma
+
+trendUp   = emaF > emaS and emaS > emaT and close > emaT and htfUp
+trendDown = emaF < emaS and emaS < emaT and close < emaT and htfDown
+
+// Pullback: price touched the slow EMA and RSI dipped recently
+pulledLong  = nz(ta.barssince(low <= emaS), 9999) <= pullbackBars and ta.lowest(rsi, pullbackBars) < rsiPullLow
+pulledShort = nz(ta.barssince(high >= emaS), 9999) <= pullbackBars and ta.highest(rsi, pullbackBars) > rsiPullHigh
+
+// Trigger: momentum candle breaking the previous bar back in trend direction
+trigLong  = close > emaF and close > open and close > high[1] and rsi > 50 and rsi < 80
+trigShort = close < emaF and close < open and close < low[1] and rsi < 50 and rsi > 20
+
+vwapOkLong  = not useVwap or na(vwapVal) or close > vwapVal
+vwapOkShort = not useVwap or na(vwapVal) or close < vwapVal
+volOk = atr >= ta.sma(atr, 50) * minAtrRatio
+
+// ───────────── Trade tracker ─────────────
+var int   dir      = 0
+var float entry    = na
+var float tp       = na
+var float sl       = na
+var int   entryBar = na
+var int   lastExit = -100000
+var int   wins     = 0
+var int   losses   = 0
+var line  tpLine   = na
+var line  slLine   = na
+
+// 1) Manage the open trade (from the bar after entry)
+if dir != 0 and bar_index > entryBar
+    hitSL = dir == 1 ? low <= sl : high >= sl
+    hitTP = dir == 1 ? high >= tp : low <= tp
+    timedOut = maxBars > 0 and bar_index - entryBar >= maxBars
+    if showLevels
+        line.set_x2(tpLine, bar_index)
+        line.set_x2(slLine, bar_index)
+    if hitSL or hitTP or timedOut
+        // If SL and TP are both inside one bar, count it as a loss (conservative)
+        win = hitSL ? false : hitTP ? true : (dir == 1 ? close > entry : close < entry)
+        if win
+            wins += 1
+        else
+            losses += 1
+        label.new(bar_index, dir == 1 ? high : low, win ? "✓" : "✗", style = label.style_none,
+                  textcolor = win ? color.lime : color.red, size = size.small)
+        dir      := 0
+        lastExit := bar_index
+
+// 2) New signals — only on confirmed bars and when flat
+canTrade = dir == 0 and bar_index - lastExit > cooldown and barstate.isconfirmed
+longSig  = canTrade and trendUp and pulledLong and trigLong and vwapOkLong and volOk
+shortSig = canTrade and trendDown and pulledShort and trigShort and vwapOkShort and volOk
+
+if longSig or shortSig
+    dir      := longSig ? 1 : -1
+    entry    := close
+    tp       := close + dir * atr * tpMult
+    sl       := close - dir * atr * slMult
+    entryBar := bar_index
+    if showLevels
+        tpLine := line.new(bar_index, tp, bar_index + 1, tp, color = color.new(color.lime, 0), style = line.style_dashed)
+        slLine := line.new(bar_index, sl, bar_index + 1, sl, color = color.new(color.red, 0), style = line.style_dashed)
+
+// ───────────── Plots ─────────────
+plot(emaF, "Fast EMA", color.new(color.aqua, 0))
+plot(emaS, "Slow EMA", color.new(color.orange, 0))
+plot(emaT, "Trend EMA", color.new(color.gray, 0), 2)
+plot(useVwap ? vwapVal : na, "VWAP", color.new(color.purple, 30), style = plot.style_circles)
+
+plotshape(longSig, "BUY", shape.labelup, location.belowbar, color.new(color.lime, 0), text = "BUY", textcolor = color.black, size = size.small)
+plotshape(shortSig, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0), text = "SELL", textcolor = color.white, size = size.small)
+
+bgcolor(trendUp ? color.new(color.lime, 93) : trendDown ? color.new(color.red, 93) : na)
+
+// ───────────── Stats panel ─────────────
+var table panel = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 20), border_width = 1)
+if showPanel and barstate.islast
+    total   = wins + losses
+    winRate = total > 0 ? wins * 100.0 / total : 0.0
+    table.cell(panel, 0, 0, "Trades",   text_color = color.white)
+    table.cell(panel, 1, 0, str.tostring(total), text_color = color.white)
+    table.cell(panel, 0, 1, "Wins",     text_color = color.white)
+    table.cell(panel, 1, 1, str.tostring(wins), text_color = color.lime)
+    table.cell(panel, 0, 2, "Losses",   text_color = color.white)
+    table.cell(panel, 1, 2, str.tostring(losses), text_color = color.red)
+    table.cell(panel, 0, 3, "Win rate", text_color = color.white)
+    table.cell(panel, 1, 3, str.tostring(winRate, "#.0") + "%", text_color = winRate >= 60 ? color.lime : color.orange)
+    table.cell(panel, 0, 4, "Trend",    text_color = color.white)
+    table.cell(panel, 1, 4, trendUp ? "UP" : trendDown ? "DOWN" : "RANGE",
+               text_color = trendUp ? color.lime : trendDown ? color.red : color.gray)
+
+// ───────────── Alerts ─────────────
+alertcondition(longSig, "KScalp BUY", "KScalp BUY on {{ticker}} @ {{close}}")
+alertcondition(shortSig, "KScalp SELL", "KScalp SELL on {{ticker}} @ {{close}}")
