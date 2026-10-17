@@ -9,7 +9,7 @@ grpT = "Trend"
 fastLen  = input.int(9, "Fast EMA", minval = 1, group = grpT)
 slowLen  = input.int(21, "Slow EMA", minval = 1, group = grpT)
 trendLen = input.int(50, "Trend EMA", minval = 1, group = grpT)
-useHtf   = input.bool(true, "Higher-timeframe filter", group = grpT)
+useHtf   = input.bool(false, "Higher-timeframe filter", group = grpT)
 htfTf    = input.timeframe("5", "HTF timeframe", group = grpT)
 htfLen   = input.int(50, "HTF EMA length", minval = 1, group = grpT)
 
@@ -17,17 +17,17 @@ grpE = "Entry"
 rsiLen       = input.int(7, "RSI length", minval = 2, group = grpE)
 rsiPullLow   = input.int(40, "RSI pullback level (long)", minval = 1, maxval = 50, group = grpE)
 rsiPullHigh  = input.int(60, "RSI pullback level (short)", minval = 50, maxval = 99, group = grpE)
-pullbackBars = input.int(5, "Pullback lookback (bars)", minval = 1, group = grpE)
+pullbackBars = input.int(3, "Pullback lookback (bars)", minval = 1, group = grpE)
 useVwap      = input.bool(true, "VWAP filter (ignored if no volume)", group = grpE)
 
 grpF = "Filters"
 atrLen      = input.int(14, "ATR length", minval = 1, group = grpF)
 minAtrRatio = input.float(0.7, "Min ATR vs its 50-bar average", minval = 0, step = 0.05, group = grpF)
-cooldown    = input.int(2, "Cooldown bars after a trade", minval = 0, group = grpF)
+cooldown    = input.int(0, "Cooldown bars after a trade", minval = 0, group = grpF)
 
 grpR = "Risk / Tracker"
-tpMult     = input.float(1.0, "Take profit (x ATR)", minval = 0.1, step = 0.1, group = grpR)
-slMult     = input.float(1.5, "Stop loss (x ATR)", minval = 0.1, step = 0.1, group = grpR)
+tpMult     = input.float(1.5, "Take profit (x ATR)", minval = 0.1, step = 0.1, group = grpR)
+slMult     = input.float(1.0, "Stop loss (x ATR)", minval = 0.1, step = 0.1, group = grpR)
 maxBars    = input.int(20, "Max bars in trade (0 = off)", minval = 0, group = grpR)
 showLevels = input.bool(true, "Show TP / SL lines", group = grpR)
 showPanel  = input.bool(true, "Show stats panel", group = grpR)

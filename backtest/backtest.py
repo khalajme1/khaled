@@ -15,10 +15,10 @@ import pandas as pd
 
 DEFAULTS = dict(
     fast_len=9, slow_len=21, trend_len=50,
-    use_htf=True, htf_minutes=5, htf_len=50,
-    rsi_len=7, rsi_pull_low=40, rsi_pull_high=60, pullback_bars=5,
-    use_vwap=True, atr_len=14, min_atr_ratio=0.7, cooldown=2,
-    tp_mult=1.0, sl_mult=1.5, max_bars=20,
+    use_htf=False, htf_minutes=5, htf_len=50,
+    rsi_len=7, rsi_pull_low=40, rsi_pull_high=60, pullback_bars=3,
+    use_vwap=True, atr_len=14, min_atr_ratio=0.7, cooldown=0,
+    tp_mult=1.5, sl_mult=1.0, max_bars=20,
 )
 
 
