@@ -7,7 +7,10 @@
 // distance = the amount risked) after costs, and the day stops once the daily target, the
 // daily max loss or the max number of trades is reached.
 // Presets were chosen with backtest/backtest.py on Yahoo data and checked on an unseen period.
-indicator("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, max_lines_count = 500, max_labels_count = 500)
+// It is a strategy so TradingView's Strategy Tester lists every trade. Keep "Account size"
+// equal to Properties → Initial capital so the dashboard and the tester agree.
+strategy("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, initial_capital = 10000, currency = currency.USD,
+     process_orders_on_close = true, pyramiding = 0, max_lines_count = 500, max_labels_count = 500)
 
 // ───────────── Preset ─────────────
 grpP = "Market preset"
@@ -143,17 +146,25 @@ cost = costIn >= 0 ? costIn : presetCost
 isOrb = stratName == "ORB"
 
 // Sessions (same definitions as backtest/backtest.py)
-sessSpec = switch sessName
-    "Asia"     => "0900-1500"
-    "London"   => "0800-1200"
-    "New York" => "0830-1200"
-    "NY Cash"  => "0930-1600"
-    => "0000-0000"
+sessFrom = switch sessName
+    "Asia"     => 9 * 60
+    "London"   => 8 * 60
+    "New York" => 8 * 60 + 30
+    "NY Cash"  => 9 * 60 + 30
+    => 0
+sessTo = switch sessName
+    "Asia"     => 15 * 60
+    "London"   => 12 * 60
+    "New York" => 12 * 60
+    "NY Cash"  => 16 * 60
+    => 24 * 60
 sessTz = switch sessName
     "Asia"   => "Asia/Tokyo"
     "London" => "Europe/London"
     => "America/New_York"
-inSess  = sessName == "All" ? true : not na(time(timeframe.period, sessSpec + ":1234567", sessTz))
+// Minutes since midnight in the session's own time zone (handles daylight saving)
+sessMins = hour(time, sessTz) * 60 + minute(time, sessTz)
+inSess   = sessName == "All" or (sessMins >= sessFrom and sessMins < sessTo)
 newSess = sessName != "All" and inSess and not inSess[1]
 utcDay  = math.floor(time / 86400000)
 newDay  = sessName == "All" ? utcDay != utcDay[1] : newSess
@@ -164,7 +175,15 @@ emaS = ta.ema(close, slowLen)
 emaT = ta.ema(close, trendLen)
 rsi  = ta.rsi(close, rsiLen)
 atr  = ta.atr(atrLen)
-vwapVal = ta.vwap(hlc3)
+// Daily VWAP from raw volume (ta.vwap throws on symbols without volume data)
+var float vwPV = 0.0
+var float vwV  = 0.0
+if timeframe.change("D")
+    vwPV := 0.0
+    vwV  := 0.0
+vwPV += hlc3 * nz(volume)
+vwV  += nz(volume)
+vwapVal = vwV > 0 ? vwPV / vwV : na
 
 // Non-repainting HTF values (previous closed HTF bar)
 htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1], lookahead = barmerge.lookahead_on)
@@ -204,7 +223,7 @@ orbLong  = isOrb and orbReady and close > orbHi and close[1] <= orbHi and (not o
 orbShort = isOrb and orbReady and close < orbLo and close[1] >= orbLo and (not orbTrend or close < emaT)
 
 // ───────────── Trade + money management ─────────────
-pointValue = pointValueIn > 0 ? pointValueIn : syminfo.pointvalue
+pointValue = pointValueIn > 0 ? pointValueIn : nz(syminfo.pointvalue, 1.0) > 0 ? nz(syminfo.pointvalue, 1.0) : 1.0
 targetR    = dailyTargetPct > 0 ? dailyTargetPct / riskPct : 0.0
 lossR      = dailyLossPct > 0 ? dailyLossPct / riskPct : 0.0
 
@@ -263,7 +282,9 @@ if dir != 0 and bar_index > entryBar
         line.set_x2(slLine, bar_index)
     if hitSL or hitTP or timedOut or sessOut
         // SL and TP inside one bar counts as a loss (conservative)
-        exitPx = hitSL ? sl : hitTP ? tp : sessOut ? open : close
+        exitPx = hitSL ? sl : hitTP ? tp : close
+        if not hitSL and not hitTP
+            strategy.close_all(comment = sessOut ? "Session end" : "Time exit")
         r = ((exitPx - entry) * dir - cost) / riskDist
         cash = r * riskCash
         netR    += r
@@ -305,13 +326,15 @@ if longSig or shortSig
     dir      := longSig ? 1 : -1
     entry    := close
     riskDist := isOrb ? (dir == 1 ? close - (orbStop == "Mid" ? orbMid : orbLo) : (orbStop == "Mid" ? orbMid : orbHi) - close) : atr * slMult
-    if riskDist <= 0
+    riskCash := balance * riskPct / 100
+    qty      := riskDist > 0 ? riskCash / (riskDist * pointValue) : na
+    if na(riskDist) or riskDist <= 0
         dir := 0
     else
         sl        := close - dir * riskDist
         tp        := close + dir * (isOrb ? riskDist * orbTp : atr * tpMult)
-        riskCash  := balance * riskPct / 100
-        qty       := riskCash / (riskDist * pointValue)
+        strategy.entry(dir == 1 ? "Long" : "Short", dir == 1 ? strategy.long : strategy.short, qty = qty)
+        strategy.exit("TP/SL", dir == 1 ? "Long" : "Short", stop = sl, limit = tp)
         entryBar  := bar_index
         entryDay  := dayId
         dayTrades += 1
@@ -380,8 +403,3 @@ if barstate.islast
     fRow(12, "Net / PF / max DD", str.tostring(netR, "#.#") + "R / " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " / " + str.tostring(maxDdR, "#.#") + "R",
          netR >= 0 ? color.lime : color.red)
     fRow(13, "Green days / target days", str.tostring(daysGreen) + " / " + str.tostring(daysTarget) + " of " + str.tostring(daysTotal), color.white)
-
-// ───────────── Alerts ─────────────
-// For alerts with entry / SL / TP / size use "Any alert() function call". These simple ones carry no levels.
-alertcondition(entered and dir == 1, "KScalp BUY", "KScalp BUY on {{ticker}} @ {{close}}")
-alertcondition(entered and dir == -1, "KScalp SELL", "KScalp SELL on {{ticker}} @ {{close}}")
