@@ -205,67 +205,77 @@ detected = str.contains(tk, "BTC") or str.contains(tk, "XBT") ? "Bitcoin" :
      str.contains(tk, "NAS") or str.contains(tk, "US100") or str.contains(tk, "USTEC") or str.contains(tk, "NDX") or rt == "NQ" or rt == "MNQ" ? "Nasdaq" :
      str.contains(tk, "US30") or str.contains(tk, "DJ") or str.contains(tk, "WS30") or rt == "YM" or rt == "MYM" ? "Dow" : "Custom"
 preset = presetIn == "Auto" ? detected : presetIn
+// Gold has its own settings per chart timeframe: 1m, 3m (also used on other timeframes), 5m and 15m.
+goldMode = preset != "Gold" ? "" : timeframe.period == "1" ? "G1" : timeframe.period == "5" ? "G5" : timeframe.period == "15" ? "G15" : "G3"
 // Nasdaq and Dow always use the US cash session, including Custom settings on these symbols.
 isUsIndex = detected == "Nasdaq" or detected == "Dow" or preset == "Nasdaq" or preset == "Dow"
 stratName = switch preset
+    "Gold"   => goldMode == "G5" or goldMode == "G15" ? "ORB" : "Pullback"
     "Dow"    => "ORB"
     "Silver" => "ORB"
     "Custom" => stratIn
     => "Pullback"
 sessChoice = switch preset
+    "Gold"   => goldMode == "G1" ? "Asia" : goldMode == "G5" or goldMode == "G15" ? "London" : "All"
     "Dow"    => "New York"
     "Silver" => "London"
     "Custom" => stratName == "ORB" and sessIn == "All" ? "New York" : sessIn
     => "All"
 sessName = isUsIndex ? "NY Cash" : sessChoice
 recTf = switch preset
-    "Gold"    => "3"
+    "Gold"    => goldMode == "G1" ? "1" : goldMode == "G5" ? "5" : goldMode == "G15" ? "15" : "3"
     "Nasdaq"  => "5"
     "Dow"     => "5"
     "Silver"  => "5"
     "Bitcoin" => "15"
     => timeframe.period
 tpMult = switch preset
-    "Gold"    => 1.5
+    "Gold"    => goldMode == "G1" ? 2.0 : 1.5
     "Nasdaq"  => 1.5
     "Bitcoin" => 3.0
     => tpIn
 slMult = switch preset
-    "Gold"    => 1.5
+    "Gold"    => goldMode == "G1" ? 2.0 : 1.5
     "Nasdaq"  => 1.5
     "Bitcoin" => 1.5
     => slIn
 pullbackBars = switch preset
-    "Gold"    => 5
+    "Gold"    => goldMode == "G1" ? 3 : 5
     "Nasdaq"  => 3
     "Bitcoin" => 5
     => pullbackIn
 minAtrRatio = switch preset
-    "Gold"    => 0.7
+    "Gold"    => goldMode == "G1" ? 0.0 : 0.7
     "Nasdaq"  => 0.7
     "Bitcoin" => 0.0
     => minAtrIn
 useHtf = switch preset
+    "Gold"    => goldMode == "G1"
     "Nasdaq"  => true
     "Custom"  => useHtfIn
     => false
 htfTf = switch preset
+    "Gold"   => goldMode == "G1" ? "5" : "15"
     "Custom" => htfIn
     "Bitcoin" => "60"
     => "15"
 orbMinutes = switch preset
+    "Gold"   => goldMode == "G15" ? 15 : 30
     "Dow"    => 30
     "Silver" => 30
     => orbMinIn
 orbStop = switch preset
+    "Gold"   => goldMode == "G15" ? "Range" : "Mid"
     "Dow"    => "Range"
     "Silver" => "Mid"
     => orbStopIn
 orbTp = switch preset
+    "Gold"   => goldMode == "G15" ? 1.5 : 2.0
     "Dow"    => 3.0
     "Silver" => 1.5
     => orbTpIn
 orbTrend = switch preset
+    "Gold"   => goldMode == "G15"
     "Dow"    => true
     "Silver" => false
     => orbTrendIn

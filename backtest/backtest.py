@@ -46,6 +46,12 @@ SESSIONS = {
 PRESETS = {
     "gold":   dict(tf=3, cost=0.25, session="all", strategy="pullback", htf_minutes=15,
                    tp_mult=1.5, sl_mult=1.5, pullback_bars=5, min_atr_ratio=0.7, use_htf=False),
+    "gold_1m":  dict(tf=1, cost=0.25, session="asia", strategy="pullback", htf_minutes=5,
+                     tp_mult=2.0, sl_mult=2.0, pullback_bars=3, min_atr_ratio=0.0, use_htf=True),
+    "gold_5m":  dict(tf=5, cost=0.25, session="london", strategy="orb", orb_minutes=30, orb_sl="mid",
+                     orb_tp_r=2.0, orb_trend=False, max_bars=0, max_trades_day=1),
+    "gold_15m": dict(tf=15, cost=0.25, session="london", strategy="orb", orb_minutes=15, orb_sl="range",
+                     orb_tp_r=1.5, orb_trend=True, max_bars=0, max_trades_day=1),
     "nasdaq": dict(tf=5, cost=0.75, session="all", strategy="pullback", htf_minutes=15,
                    tp_mult=1.5, sl_mult=1.5, pullback_bars=3, min_atr_ratio=0.7, use_htf=True),
     "dow":    dict(tf=5, cost=2.0, session="ny", strategy="orb", orb_minutes=30, orb_sl="range",
