@@ -7,19 +7,36 @@
 // distance = the amount risked) after costs, and the day stops once the daily target, the
 // daily max loss or the max number of trades is reached.
 // Presets were chosen with backtest/backtest.py on Yahoo data and checked on an unseen period.
+// Lot sizing: the daily target is split into equal trade targets and each lot is sized so the
+// take profit earns one of them; after a loss the next target also covers the day's loss
+// (capped by max losses in a row and max risk per trade, reset every day).
 // It is a strategy so TradingView's Strategy Tester lists every trade. Keep "Account size"
 // equal to Properties → Initial capital so the dashboard and the tester agree.
-strategy("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, initial_capital = 10000, currency = currency.USD,
+strategy("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, initial_capital = 1800, currency = currency.USD,
      process_orders_on_close = true, pyramiding = 0, max_lines_count = 500, max_labels_count = 500)
 // ───────────── Preset ─────────────
 grpP = "Market preset"
 presetIn = input.string("Auto", "Preset", options = ["Auto", "Gold", "Nasdaq", "Dow", "Silver", "Bitcoin", "Custom"], group = grpP,
      tooltip = "Auto picks the preset from the chart symbol (XAUUSD/GC, NAS100/NQ, US30/YM, XAGUSD/SI, BTC). Custom uses the settings below.")
+forceUsCash = input.bool(false, "ناسداك وداو: الجلسة الأمريكية فقط 09:30–16:00", group = grpP,
+     tooltip = "في الاختبار هذا الخيار خسر على الناسداك والداو بكل الإعدادات. الأفضل: ناسداك كل الجلسات، داو نيويورك 8:30.")
 grpM = "Money management"
-accountSize    = input.float(10000, "Account size ($)", minval = 1, group = grpM)
-riskPct        = input.float(1.0, "Risk per trade (%)", minval = 0.01, step = 0.25, group = grpM)
-dailyTargetPct = input.float(2.0, "Daily target (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
-dailyLossPct   = input.float(2.0, "Daily max loss (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
+accountSize    = input.float(1800, "Account size ($)", minval = 1, group = grpM)
+sizeMode       = input.string("لوتات — تارقت اليوم على 4 أهداف", "طريقة حجم الصفقة", options = ["لوتات — تارقت اليوم على 4 أهداف", "نسبة مخاطرة %"], group = grpM,
+     tooltip = "لوتات: اللوت يُحسب بحيث لو تحققت الأهداف الأربعة يكون الربح = تارقت اليوم (2.5% = 45$ على 1800$)، كل هدف ربع اللوت. نسبة مخاطرة: الحجم من نسبة المخاطرة.")
+exitModeIn     = input.string("4 أهداف + ستوب دخول", "طريقة الخروج", options = ["4 أهداف + ستوب دخول", "هدف واحد"], group = grpM,
+     tooltip = "4 أهداف: الصفقة تتقسم 4 أجزاء. بعد الهدف الأول الستوب ينتقل للدخول، بعد الثاني للهدف الأول، بعد الثالث للهدف الثاني، والجزء الرابع يبقى مفتوح للهدف الأخير.")
+riskPct        = input.float(1.0, "Risk per trade (%) — نسبة مخاطرة فقط", minval = 0.01, step = 0.25, group = grpM)
+dailyTargetPct = input.float(2.5, "Daily target (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
+dailyLossPct   = input.float(5.0, "Daily max loss (%) — stop trading after it (0 = off)", minval = 0, step = 0.5, group = grpM)
+lotValueIn     = input.float(-1, "قيمة حركة 1.0 للوت الواحد ($)، -1 = حسب السوق", group = grpM,
+     tooltip = "حسب السوق: ذهب 100 (1 لوت = 100 أونصة)، فضة 5000، ناسداك وداو وبيتكوين 1. يختلف بين الوسطاء والعقود: NQ = 20، YM = 5، GC = 100، SI = 5000.")
+minLot         = input.float(0.01, "أقل لوت", minval = 0.0001, step = 0.01, group = grpM)
+lotStep        = input.float(0.01, "خطوة اللوت", minval = 0.0001, step = 0.01, group = grpM)
+useRecovery    = input.bool(true, "زيادة اللوت بعد الخسارة (تعويض)", group = grpM,
+     tooltip = "بعد الخسارة، اللوت التالي يُحسب بحيث الأهداف تعوض خسارة اليوم + تارقت اليوم. ليس مضاعفة عمياء: له حد لعدد الخسارات وحد للمخاطرة، ويتصفّر كل يوم. إذا أقل لوت يخاطر أكثر من الحد، الصفقة تتخطى.")
+maxRecSteps    = input.int(3, "أقصى خسارات متتالية للتعويض", minval = 1, maxval = 10, group = grpM)
+maxRiskTrade   = input.float(3.0, "أقصى مخاطرة للصفقة الواحدة (%)", minval = 0.1, step = 0.5, group = grpM)
 maxTradesIn    = input.int(-1, "Max trades per day (-1 = preset, 0 = off)", minval = -1, group = grpM)
 pointValueIn   = input.float(0, "Value of 1.0 price move per 1 qty ($, 0 = symbol)", minval = 0, group = grpM,
      tooltip = "Used for the position size. 0 uses the symbol's point value (futures: contract multiplier, CFD/spot: usually 1 = one unit).")
@@ -39,6 +56,10 @@ orbStopIn   = input.string("Range", "ORB: stop at", options = ["Range", "Mid"], 
 orbTpIn     = input.float(2.0, "ORB: take profit (x risk)", minval = 0.1, step = 0.1, group = grpC)
 orbTrendIn  = input.bool(false, "ORB: only with the trend EMA", group = grpC)
 maxBarsIn   = input.int(20, "Max bars in trade (0 = off)", minval = 0, group = grpC)
+tp1RIn      = input.float(1.0, "الهدف 1 (× الستوب)", minval = 0.1, step = 0.1, group = grpC, inline = "lad1")
+tp2RIn      = input.float(1.5, "الهدف 2", minval = 0.1, step = 0.1, group = grpC, inline = "lad1")
+tp3RIn      = input.float(2.0, "الهدف 3", minval = 0.1, step = 0.1, group = grpC, inline = "lad2")
+tp4RIn      = input.float(3.0, "الهدف 4", minval = 0.1, step = 0.1, group = grpC, inline = "lad2")
 costCustom  = input.float(0, "Round-trip cost in price", minval = 0, group = grpC)
 grpI = "Indicator"
 fastLen     = input.int(9, "Fast EMA", minval = 1, group = grpI)
@@ -95,10 +116,10 @@ entryColor = color.rgb(53, 116, 176)
 type TradeVisual
     int tradeNo = 0
     line entryLine = na
-    line tpLine = na
+    array<line> tpLines = na
     line slLine = na
     label entryTag = na
-    label tpTag = na
+    array<label> tpTags = na
     label slTag = na
     label signalTag = na
     label exitTag = na
@@ -107,18 +128,20 @@ fDeleteLevels(TradeVisual v) =>
     if not na(v.entryLine)
         line.delete(v.entryLine)
         v.entryLine := na
-    if not na(v.tpLine)
-        line.delete(v.tpLine)
-        v.tpLine := na
+    if not na(v.tpLines)
+        for ln in v.tpLines
+            line.delete(ln)
+        array.clear(v.tpLines)
     if not na(v.slLine)
         line.delete(v.slLine)
         v.slLine := na
     if not na(v.entryTag)
         label.delete(v.entryTag)
         v.entryTag := na
-    if not na(v.tpTag)
-        label.delete(v.tpTag)
-        v.tpTag := na
+    if not na(v.tpTags)
+        for lb in v.tpTags
+            label.delete(lb)
+        array.clear(v.tpTags)
     if not na(v.slTag)
         label.delete(v.slTag)
         v.slTag := na
@@ -133,14 +156,16 @@ fDeleteVisual(TradeVisual v) =>
 fMoveLevels(TradeVisual v, int rightX) =>
     if not na(v.entryLine)
         line.set_x2(v.entryLine, rightX)
-    if not na(v.tpLine)
-        line.set_x2(v.tpLine, rightX)
+    if not na(v.tpLines)
+        for ln in v.tpLines
+            line.set_x2(ln, rightX)
     if not na(v.slLine)
         line.set_x2(v.slLine, rightX)
     if not na(v.entryTag)
         label.set_x(v.entryTag, rightX)
-    if not na(v.tpTag)
-        label.set_x(v.tpTag, rightX)
+    if not na(v.tpTags)
+        for lb in v.tpTags
+            label.set_x(lb, rightX)
     if not na(v.slTag)
         label.set_x(v.slTag, rightX)
 
@@ -207,8 +232,8 @@ detected = str.contains(tk, "BTC") or str.contains(tk, "XBT") ? "Bitcoin" :
 preset = presetIn == "Auto" ? detected : presetIn
 // Gold has its own settings per chart timeframe: 1m, 3m (also used on other timeframes), 5m and 15m.
 goldMode = preset != "Gold" ? "" : timeframe.period == "1" ? "G1" : timeframe.period == "5" ? "G5" : timeframe.period == "15" ? "G15" : "G3"
-// Nasdaq and Dow always use the US cash session, including Custom settings on these symbols.
-isUsIndex = detected == "Nasdaq" or detected == "Dow" or preset == "Nasdaq" or preset == "Dow"
+// Optional: Nasdaq and Dow only in the US cash session (lost in the backtest, so off by default).
+isUsIndex = forceUsCash and (detected == "Nasdaq" or detected == "Dow" or preset == "Nasdaq" or preset == "Dow")
 stratName = switch preset
     "Gold"   => goldMode == "G5" or goldMode == "G15" ? "ORB" : "Pullback"
     "Dow"    => "ORB"
@@ -279,7 +304,34 @@ orbTrend = switch preset
     "Dow"    => true
     "Silver" => false
     => orbTrendIn
-maxBars = preset == "Custom" ? maxBarsIn : stratName == "ORB" ? 0 : 20
+// Four take profits in multiples of the stop distance (chosen per market on the backtest)
+useLadder = exitModeIn == "4 أهداف + ستوب دخول"
+tp1R = switch preset
+    "Gold"   => goldMode == "G1" ? 0.5 : goldMode == "G15" ? 0.4 : 1.0
+    "Dow"    => 0.75
+    "Custom" => tp1RIn
+    => 1.0
+tp2R = switch preset
+    "Gold"    => goldMode == "G1" ? 1.0 : goldMode == "G15" ? 0.8 : 1.5
+    "Dow"     => 1.5
+    "Bitcoin" => 2.0
+    "Custom"  => tp2RIn
+    => 1.5
+tp3R = switch preset
+    "Gold"    => goldMode == "G15" ? 1.2 : 2.0
+    "Dow"     => 2.25
+    "Bitcoin" => 3.0
+    "Custom"  => tp3RIn
+    => 2.0
+tp4R = switch preset
+    "Gold"    => goldMode == "G15" ? 2.0 : 3.0
+    "Dow"     => 3.5
+    "Bitcoin" => 5.0
+    "Custom"  => tp4RIn
+    => 3.0
+maxBars = preset == "Custom" ? maxBarsIn : stratName == "ORB" ? 0 : not useLadder ? 20 :
+     preset == "Bitcoin" ? 40 : preset == "Nasdaq" or goldMode == "G1" ? 0 : 20
+lotValue = lotValueIn > 0 ? lotValueIn : preset == "Gold" ? 100.0 : preset == "Silver" ? 5000.0 : 1.0
 maxTradesPreset = stratName == "ORB" and preset != "Custom" ? 1 : 0
 maxTrades = maxTradesIn >= 0 ? maxTradesIn : maxTradesPreset
 presetCost = switch preset
@@ -415,6 +467,16 @@ var float dayCash   = 0.0
 var int   dayTrades = 0
 var bool  dayDone   = false
 var string dayWhy   = ""
+var float lots      = na
+var float recDebt   = 0.0
+var int   recSteps  = 0
+var array<float> tpLevels = array.new<float>()
+var int   nParts    = 1
+var int   hits      = 0
+var float gainPx    = 0.0
+var float partQty   = na
+var int   tp1Count  = 0
+isLotMode = sizeMode == "لوتات — تارقت اليوم على 4 أهداف"
 fRollPeriod(dayBook, dayKey, dayStamp, accountSize + pnlCash, dailyTargetPct)
 fRollPeriod(weekBook, weekKey, weekStamp, accountSize + pnlCash, weekTargetPct)
 fRollPeriod(monthBook, monthKey, monthStamp, accountSize + pnlCash, monthTargetPct)
@@ -426,21 +488,58 @@ if newDay
     dayTrades := 0
     dayDone   := false
     dayWhy    := ""
+    recDebt   := 0.0
+    recSteps  := 0
 // 1) Manage the open trade (from the bar after entry)
 if dir != 0 and bar_index > entryBar
-    hitSL    = dir == 1 ? low <= sl : high >= sl
-    hitTP    = dir == 1 ? high >= tp : low <= tp
     timedOut = maxBars > 0 and bar_index - entryBar >= maxBars
     sessOut  = not inSess or usSessionEnd
-    if hitSL or hitTP or timedOut or sessOut
-        // SL and TP inside one bar counts as a loss (conservative)
-        exitPx = hitSL ? sl : hitTP ? tp : close
-        if not hitSL and not hitTP
+    stopHit  = dir == 1 ? low <= sl : high >= sl
+    hitsBefore = hits
+    float exitPx = na
+    if stopHit
+        // The stop is checked first (conservative) and closes every open part
+        gainPx += (nParts - hits) * (sl - entry) * dir / nParts
+        exitPx := sl
+    else
+        while hits < nParts and (dir == 1 ? high >= array.get(tpLevels, hits) : low <= array.get(tpLevels, hits))
+            gainPx += (array.get(tpLevels, hits) - entry) * dir / nParts
+            hits += 1
+        if hits == nParts
+            exitPx := tp
+        else if timedOut or sessOut
+            gainPx += (nParts - hits) * (close - entry) * dir / nParts
+            exitPx := close
             strategy.close_all(comment = sessOut ? "Session end" : "Time exit")
-        r = ((exitPx - entry) * dir - cost) / riskDist
+        else if hits > hitsBefore
+            // TP1 → stop to entry, TP2 → stop to TP1, TP3 → stop to TP2; the last part keeps running
+            sl := hits == 1 ? entry : array.get(tpLevels, hits - 2)
+            for k = hits to nParts - 1
+                strategy.exit("TP" + str.tostring(k + 1), dir == 1 ? "Long" : "Short", qty = partQty, limit = array.get(tpLevels, k), stop = sl)
+            if not na(activeVisual)
+                if not na(activeVisual.slLine)
+                    line.set_y1(activeVisual.slLine, sl)
+                    line.set_y2(activeVisual.slLine, sl)
+                if not na(activeVisual.slTag)
+                    label.set_y(activeVisual.slTag, sl)
+                    label.set_text(activeVisual.slTag, (hits == 1 ? "ستوب دخول | " : "ستوب حماية | ") + str.tostring(sl, format.mintick))
+    if not na(exitPx)
+        tp1Count += hits >= 1 ? 1 : 0
+        r = (gainPx - cost) / riskDist
         cash = r * riskCash
         netR    += r
         pnlCash += cash
+        // Recovery: carry today's losses into the next trade target, for at most maxRecSteps losses in a row
+        if cash < 0
+            recDebt  += -cash
+            recSteps += 1
+            if recSteps > maxRecSteps
+                recDebt  := 0.0
+                recSteps := 0
+        else
+            recDebt := math.max(0.0, recDebt - cash)
+            if recDebt == 0
+                recSteps := 0
         peakR   := math.max(peakR, netR)
         maxDdR  := math.max(maxDdR, peakR - netR)
         if r > 0
@@ -451,8 +550,8 @@ if dir != 0 and bar_index > entryBar
             grossLoss -= r
         if not na(activeVisual)
             if showExitLabels
-                exitReason = hitSL ? "ستوب" : hitTP ? "تحقق الهدف" : sessOut ? "نهاية الجلسة" : "خروج بالوقت"
-                resultTxt = exitReason + " #" + str.tostring(activeVisual.tradeNo) + "\n" + (r >= 0 ? "+" : "") + str.tostring(r, "#.##") + "R"
+                exitReason = stopHit ? (hits == 0 ? "ستوب" : hits == 1 ? "ستوب دخول" : "ستوب حماية") : hits == nParts ? "تحققت الأهداف" : sessOut ? "نهاية الجلسة" : "خروج بالوقت"
+                resultTxt = exitReason + " #" + str.tostring(activeVisual.tradeNo) + (nParts > 1 ? " | أهداف " + str.tostring(hits) + "/" + str.tostring(nParts) : "") + "\n" + (r >= 0 ? "+" : "") + str.tostring(r, "#.##") + "R"
                 resultTip = "سعر الخروج: " + str.tostring(exitPx, format.mintick) + "\nالنتيجة: " + str.tostring(cash, "#.##") + " $"
                 activeVisual.exitTag := label.new(bar_index, na, resultTxt,
                      yloc = dir == 1 ? yloc.abovebar : yloc.belowbar,
@@ -487,19 +586,52 @@ canTrade = dir == 0 and not dayDone and entrySessOpen and bar_index - lastExit >
 longSig  = canTrade and (pbLong or orbLong)
 shortSig = canTrade and not longSig and (pbShort or orbShort)
 balance = accountSize + pnlCash
+// The trade aims at today's whole target (all take profits hit) plus today's losses when recovering
+dayTargetCash = nz(dayBook.current.targetCash, accountSize * dailyTargetPct / 100)
+avgTpR = (tp1R + tp2R + tp3R + tp4R) / 4
+// Lots for ONE part. na = even the minimum lot would risk more than the max risk per trade.
+fPartLots(float fullMove, float riskDistance, int parts) =>
+    float result = na
+    if isLotMode
+        need   = dayTargetCash + (useRecovery ? recDebt : 0.0)
+        wanted = math.max(minLot, math.round(need / (fullMove * lotValue) / parts / lotStep) * lotStep)
+        capped = math.floor(balance * maxRiskTrade / 100 / (riskDistance * lotValue) / parts / lotStep + 1e-9) * lotStep
+        result := capped < minLot ? na : math.min(wanted, capped)
+    else
+        result := math.max(minLot, math.floor(balance * riskPct / 100 / (riskDistance * lotValue) / parts / lotStep + 1e-9) * lotStep)
+    result
 if longSig or shortSig
     dir      := longSig ? 1 : -1
     entry    := close
     riskDist := isOrb ? (dir == 1 ? close - (orbStop == "Mid" ? orbMid : orbLo) : (orbStop == "Mid" ? orbMid : orbHi) - close) : atr * slMult
-    riskCash := balance * riskPct / 100
-    qty      := riskDist > 0 ? riskCash / (riskDist * pointValue) : na
-    if na(riskDist) or riskDist <= 0
+    riskOk    = not na(riskDist) and riskDist > 0
+    newParts  = useLadder ? 4 : 1
+    singleTp  = isOrb ? riskDist * orbTp : atr * tpMult
+    fullMove  = useLadder ? riskDist * avgTpR : singleTp
+    partLots  = riskOk ? fPartLots(fullMove, riskDist, newParts) : na
+    if na(partLots)
         dir := 0
     else
-        sl        := close - dir * riskDist
-        tp        := close + dir * (isOrb ? riskDist * orbTp : atr * tpMult)
+        nParts   := newParts
+        array.clear(tpLevels)
+        if useLadder
+            array.push(tpLevels, close + dir * riskDist * tp1R)
+            array.push(tpLevels, close + dir * riskDist * tp2R)
+            array.push(tpLevels, close + dir * riskDist * tp3R)
+            array.push(tpLevels, close + dir * riskDist * tp4R)
+        else
+            array.push(tpLevels, close + dir * singleTp)
+        sl       := close - dir * riskDist
+        tp       := array.get(tpLevels, nParts - 1)
+        hits     := 0
+        gainPx   := 0.0
+        lots     := partLots * nParts
+        riskCash := lots * riskDist * lotValue
+        partQty  := partLots * lotValue / pointValue
+        qty      := partQty * nParts
         strategy.entry(dir == 1 ? "Long" : "Short", dir == 1 ? strategy.long : strategy.short, qty = qty)
-        strategy.exit("TP/SL", dir == 1 ? "Long" : "Short", stop = sl, limit = tp)
+        for k = 0 to nParts - 1
+            strategy.exit("TP" + str.tostring(k + 1), dir == 1 ? "Long" : "Short", qty = partQty, limit = array.get(tpLevels, k), stop = sl)
         entryBar  := bar_index
         dayTrades += 1
         dayBook.current.entries += 1
@@ -518,15 +650,22 @@ if longSig or shortSig
         if showLevels
             activeVisual.entryLine := line.new(bar_index, entry, bar_index + levelOffset, entry,
                  color = color.new(entryColor, 25), style = line.style_dotted)
-            activeVisual.tpLine := line.new(bar_index, tp, bar_index + levelOffset, tp,
-                 color = buyColor, width = 2)
+            activeVisual.tpLines := array.new<line>()
+            for k = 0 to nParts - 1
+                lvl = array.get(tpLevels, k)
+                array.push(activeVisual.tpLines, line.new(bar_index, lvl, bar_index + levelOffset, lvl,
+                     color = color.new(buyColor, k == nParts - 1 ? 0 : 35), width = k == nParts - 1 ? 2 : 1))
             activeVisual.slLine := line.new(bar_index, sl, bar_index + levelOffset, sl,
                  color = sellColor, style = line.style_dashed)
         if showLevelTags
             activeVisual.entryTag := label.new(bar_index + levelOffset, entry, "دخول #" + tradeIdTxt + " | " + str.tostring(entry, format.mintick),
                  style = label.style_label_left, color = entryColor, textcolor = color.white, size = tagSize)
-            activeVisual.tpTag := label.new(bar_index + levelOffset, tp, "الهدف | " + str.tostring(tp, format.mintick),
-                 style = label.style_label_left, color = buyColor, textcolor = color.white, size = tagSize)
+            activeVisual.tpTags := array.new<label>()
+            for k = 0 to nParts - 1
+                lvl = array.get(tpLevels, k)
+                tagTxt = (nParts > 1 ? "TP" + str.tostring(k + 1) + (k == nParts - 1 ? " مفتوح" : "") : "الهدف") + " | " + str.tostring(lvl, format.mintick)
+                array.push(activeVisual.tpTags, label.new(bar_index + levelOffset, lvl, tagTxt,
+                     style = label.style_label_left, color = color.new(buyColor, k == nParts - 1 ? 0 : 30), textcolor = color.white, size = tagSize))
             activeVisual.slTag := label.new(bar_index + levelOffset, sl, "الستوب | " + str.tostring(sl, format.mintick),
                  style = label.style_label_left, color = sellColor, textcolor = color.white, size = tagSize)
         array.push(tradeVisuals, activeVisual)
@@ -534,7 +673,7 @@ if longSig or shortSig
             fDeleteVisual(array.shift(tradeVisuals))
         alert("KScalp " + (dir == 1 ? "BUY " : "SELL ") + syminfo.ticker + " @ " + str.tostring(close, format.mintick) +
              " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) +
-             " | Qty " + str.tostring(qty, "#.###") + " | Risk " + str.tostring(riskCash, "#.##") + "$", alert.freq_once_per_bar_close)
+             " | Lot " + str.tostring(lots, "#.##") + (nParts > 1 ? " (4 x " + str.tostring(lots / 4, "#.##") + ")" : "") + " | Risk " + str.tostring(riskCash, "#.##") + "$", alert.freq_once_per_bar_close)
 // Update the same labels instead of creating repeated labels on every candle.
 if dir != 0 and not na(activeVisual)
     fMoveLevels(activeVisual, bar_index + levelOffset)
@@ -631,7 +770,7 @@ dashPos = switch dashPosIn
     "Bottom left"  => position.bottom_left
     => position.top_right
 dashSize = dashSizeIn == "مضغوط" ? size.tiny : size.small
-var table dash = table.new(dashPos, 4, 20, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 75), border_width = 1)
+var table dash = table.new(dashPos, 4, 21, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 75), border_width = 1)
 
 fCell(int col, int row, string cellTxt, color cellColor) =>
     table.cell(dash, col, row, cellTxt, text_color = cellColor, text_size = dashSize,
@@ -657,7 +796,8 @@ if barstate.isfirst
     table.merge_cells(dash, 1, 16, 3, 16)
     table.merge_cells(dash, 1, 17, 3, 17)
     table.merge_cells(dash, 1, 18, 3, 18)
-    table.merge_cells(dash, 0, 19, 3, 19)
+    table.merge_cells(dash, 1, 19, 3, 19)
+    table.merge_cells(dash, 0, 20, 3, 20)
 if barstate.islast
     tfOk     = timeframe.period == recTf
     total    = wins + losses
@@ -666,8 +806,10 @@ if barstate.islast
     status   = dayDone ? (dayWhy == "TARGET" ? "تحقق تارقت اليوم" : dayWhy == "MAX LOSS" ? "بلوغ حد الخسارة" : "بلوغ عدد الصفقات") :
          not entrySessOpen ? "الجلسة مغلقة" : dir != 0 ? "صفقة مفتوحة" : "بانتظار إشارة"
     statusC  = dayDone ? (dayWhy == "TARGET" ? color.lime : color.red) : not entrySessOpen ? color.gray : color.aqua
-    riskNow  = balance * riskPct / 100
-    nextQty  = not isOrb and atr > 0 ? riskNow / (atr * slMult * pointValue) : na
+    nextParts = useLadder ? 4 : 1
+    nextPart = not isOrb and atr > 0 ? fPartLots(useLadder ? atr * slMult * avgTpR : atr * tpMult, atr * slMult, nextParts) : na
+    nextLots = na(nextPart) ? na : nextPart * nextParts
+    riskNow  = na(nextLots) ? na : nextLots * atr * slMult * lotValue
     marketTxt = preset + " | " + stratName + " | فريم " + timeframe.period + (tfOk ? " ✓" : " ← المقترح " + recTf)
     sessionTxt = (isUsIndex ? "أمريكي 09:30–16:00 نيويورك" : sessName) + "\n" + status
     table.cell(dash, 0, 0, "KHALED SCALP PRO", text_color = color.white, text_size = size.small, bgcolor = color.new(entryColor, 50))
@@ -685,12 +827,19 @@ if barstate.islast
     fStatsRow(12, "صافي / تارقت السابق", fPreviousCash(dayBook.previous), fPreviousCash(weekBook.previous), fPreviousCash(monthBook.previous), fPnlColor(dayBook.previous), fPnlColor(weekBook.previous), fPnlColor(monthBook.previous))
     fStatsRow(13, "هل تحقق بالسابق؟", fGoalState(dayBook.previous, true), fGoalState(weekBook.previous, true), fGoalState(monthBook.previous, true), fGoalColor(dayBook.previous, true), fGoalColor(weekBook.previous, true), fGoalColor(monthBook.previous, true))
     fStatsRow(14, "حققت / فترات تداول", fHistoryRate(dayBook), fHistoryRate(weekBook), fHistoryRate(monthBook), color.white, color.white, color.white)
-    fMergedRow(15, "الرصيد / مخاطرة الصفقة", "$" + str.tostring(balance, "#,##0.00") + " | $" + str.tostring(riskNow, "#,##0.00") + " (" + str.tostring(riskPct, "#.##") + "%)", color.white)
-    openTxt = dir != 0 ? (dir == 1 ? "شراء" : "بيع") + " | دخول " + str.tostring(entry, format.mintick) + " | كمية " + str.tostring(qty, "#.###") + "\nهدف " + str.tostring(tp, format.mintick) + " | ستوب " + str.tostring(sl, format.mintick) : "لا توجد صفقة | الحجم القادم: " + (na(nextQty) ? "عند الاختراق" : str.tostring(nextQty, "#.###"))
+    sizeTxt = isLotMode ? "هدف الصفقة " + fMoney(dayTargetCash) + (useLadder ? " على 4 أهداف" : "") + (useRecovery ? " | تعويض $" + str.tostring(recDebt, "#,##0.00") + " (" + str.tostring(recSteps) + "/" + str.tostring(maxRecSteps) + ")" : "") : "مخاطرة " + str.tostring(riskPct, "#.##") + "%"
+    fMergedRow(15, "الرصيد / الحجم", "$" + str.tostring(balance, "#,##0.00") + " | " + sizeTxt + (na(riskNow) ? "" : "\nمخاطرة الصفقة القادمة $" + str.tostring(riskNow, "#,##0.00")), color.white)
+    levelsTxt = ""
+    if dir != 0
+        for k = 0 to nParts - 1
+            levelsTxt += (k > 0 ? " | " : "") + (k < hits ? "✓" : "") + (nParts > 1 ? "TP" + str.tostring(k + 1) + " " : "هدف ") + str.tostring(array.get(tpLevels, k), format.mintick)
+    openTxt = dir != 0 ? (dir == 1 ? "شراء" : "بيع") + " | دخول " + str.tostring(entry, format.mintick) + " | لوت " + str.tostring(lots, "#.##") + " | ستوب " + str.tostring(sl, format.mintick) + "\n" + levelsTxt : "لا توجد صفقة | اللوت القادم: " + (na(nextLots) ? "عند الاختراق" : str.tostring(nextLots, "#.##"))
     fMergedRow(16, "الصفقة المفتوحة", openTxt, color.white)
     limitsTxt = "حد الخسارة: " + (na(dayLossCash) ? "معطل" : fMoney(-dayLossCash)) + " | صفقات اليوم: " + str.tostring(dayTrades) + " / " + (maxTrades > 0 ? str.tostring(maxTrades) : "بلا حد")
     fMergedRow(17, "حدود اليوم", limitsTxt, color.white)
-    totalTxt = "صفقات " + str.tostring(total) + " | نجاح " + str.tostring(winRate, "#.0") + "% | صافي " + fMoney(pnlCash) + "\n" + str.tostring(netR, "#.#") + "R | PF " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " | أقصى تراجع " + str.tostring(maxDdR, "#.#") + "R"
+    totalTxt = "صفقات " + str.tostring(total) + " | نجاح " + str.tostring(winRate, "#.0") + "% | TP1 " + str.tostring(total > 0 ? tp1Count * 100.0 / total : 0.0, "#.0") + "% | صافي " + fMoney(pnlCash) + "\n" + str.tostring(netR, "#.#") + "R | PF " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " | أقصى تراجع " + str.tostring(maxDdR, "#.#") + "R"
     fMergedRow(18, "جميع البيانات", totalTxt, pnlCash >= 0 ? color.lime : color.red)
     footerTxt = "صفقات مغلقة حتى آخر شمعة محمّلة | توقيت " + statsTz + "\nالفترات الجزئية مستبعدة من نسبة تحقيق الفترات."
-    table.cell(dash, 0, 19, footerTxt, text_color = color.silver, text_size = dashSize)
+    bestTxt = "ذهب: 1د آسيا | 3د كل الجلسات | 5د و15د لندن 8:00\nناسداك: 5د كل الجلسات | داو: 5د نيويورك 8:30\nفضة: 5د لندن 8:00 | بيتكوين: 15د طول اليوم"
+    fMergedRow(19, "أفضل جلسة لكل سوق", bestTxt, color.aqua)
+    table.cell(dash, 0, 20, footerTxt, text_color = color.silver, text_size = dashSize)

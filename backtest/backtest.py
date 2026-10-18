@@ -40,26 +40,30 @@ SESSIONS = {
     "ny_cash": ("America/New_York", 9 * 60 + 30, 16 * 60),
 }
 
-# Market presets: chart timeframe, session, settings and an assumed round-trip
-# cost (spread + commission + slippage) in price units. Mirrors the "Preset"
-# input of the Pine indicator.
+# Market presets: chart timeframe, session, settings, the four take profits (in R)
+# and an assumed round-trip cost (spread + commission + slippage) in price units.
+# Mirrors the "Preset" input of the Pine indicator.
 PRESETS = {
-    "gold":   dict(tf=3, cost=0.25, session="all", strategy="pullback", htf_minutes=15,
-                   tp_mult=1.5, sl_mult=1.5, pullback_bars=5, min_atr_ratio=0.7, use_htf=False),
+    "gold":     dict(tf=3, cost=0.25, session="all", strategy="pullback", htf_minutes=15,
+                     tp_mult=1.5, sl_mult=1.5, pullback_bars=5, min_atr_ratio=0.7, use_htf=False,
+                     ladder=(1, 1.5, 2, 3), max_bars=20),
     "gold_1m":  dict(tf=1, cost=0.25, session="asia", strategy="pullback", htf_minutes=5,
-                     tp_mult=2.0, sl_mult=2.0, pullback_bars=3, min_atr_ratio=0.0, use_htf=True),
+                     tp_mult=2.0, sl_mult=2.0, pullback_bars=3, min_atr_ratio=0.0, use_htf=True,
+                     ladder=(0.5, 1, 2, 3), max_bars=0),
     "gold_5m":  dict(tf=5, cost=0.25, session="london", strategy="orb", orb_minutes=30, orb_sl="mid",
-                     orb_tp_r=2.0, orb_trend=False, max_bars=0, max_trades_day=1),
+                     orb_tp_r=2.0, orb_trend=False, max_bars=0, max_trades_day=1, ladder=(1, 1.5, 2, 3)),
     "gold_15m": dict(tf=15, cost=0.25, session="london", strategy="orb", orb_minutes=15, orb_sl="range",
-                     orb_tp_r=1.5, orb_trend=True, max_bars=0, max_trades_day=1),
-    "nasdaq": dict(tf=5, cost=0.75, session="all", strategy="pullback", htf_minutes=15,
-                   tp_mult=1.5, sl_mult=1.5, pullback_bars=3, min_atr_ratio=0.7, use_htf=True),
-    "dow":    dict(tf=5, cost=2.0, session="ny", strategy="orb", orb_minutes=30, orb_sl="range",
-                   orb_tp_r=3.0, orb_trend=True, max_bars=0, max_trades_day=1),
-    "silver": dict(tf=5, cost=0.012, session="london", strategy="orb", orb_minutes=30, orb_sl="mid",
-                   orb_tp_r=1.5, orb_trend=False, max_bars=0, max_trades_day=1),
-    "btc":    dict(tf=15, cost=15.0, session="all", strategy="pullback", htf_minutes=60,
-                   tp_mult=3.0, sl_mult=1.5, pullback_bars=5, min_atr_ratio=0.0, use_htf=False),
+                     orb_tp_r=1.5, orb_trend=True, max_bars=0, max_trades_day=1, ladder=(0.4, 0.8, 1.2, 2)),
+    "nasdaq":   dict(tf=5, cost=0.75, session="all", strategy="pullback", htf_minutes=15,
+                     tp_mult=1.5, sl_mult=1.5, pullback_bars=3, min_atr_ratio=0.7, use_htf=True,
+                     ladder=(1, 1.5, 2, 3), max_bars=0),
+    "dow":      dict(tf=5, cost=2.0, session="ny", strategy="orb", orb_minutes=30, orb_sl="range",
+                     orb_tp_r=3.0, orb_trend=True, max_bars=0, max_trades_day=1, ladder=(0.75, 1.5, 2.25, 3.5)),
+    "silver":   dict(tf=5, cost=0.012, session="london", strategy="orb", orb_minutes=30, orb_sl="mid",
+                     orb_tp_r=1.5, orb_trend=False, max_bars=0, max_trades_day=1, ladder=(1, 1.5, 2, 3)),
+    "btc":      dict(tf=15, cost=15.0, session="all", strategy="pullback", htf_minutes=60,
+                     tp_mult=3.0, sl_mult=1.5, pullback_bars=5, min_atr_ratio=0.0, use_htf=False,
+                     ladder=(1, 2, 3, 5), max_bars=40),
 }
 
 
@@ -199,9 +203,14 @@ def orb_signals(d, p):
 
 
 def simulate(d, p):
+    """One trade at a time. With p["ladder"] = (t1, t2, t3, t4) in R the position is split into
+    four equal parts closed at entry + t*risk; after TP1 the stop moves to entry, after TP2 to
+    TP1 and after TP3 to TP2, so the last part runs to TP4 (or the time / session exit).
+    Without a ladder there is one take profit (the strategy's own target)."""
     long_, short, risk_l, tp_l, risk_s, tp_s = (orb_signals if p["strategy"] == "orb" else signals)(d, p)
     h, l, c = (d[k].to_numpy(float) for k in ("high", "low", "close"))
     in_sess, day_key = session_info(d["time"], p["session"])
+    ladder = p.get("ladder")
     trades = []
     pos, last_exit = 0, -10**9
     cur_day, day_r, day_n, day_done = None, 0.0, 0, False
@@ -209,15 +218,29 @@ def simulate(d, p):
         if day_key[i] != cur_day:
             cur_day, day_r, day_n, day_done = day_key[i], 0.0, 0, False
         if pos != 0 and i > ebar:
-            hit_sl = l[i] <= sl if pos == 1 else h[i] >= sl
-            hit_tp = h[i] >= tp if pos == 1 else l[i] <= tp
-            timed = p["max_bars"] > 0 and i - ebar >= p["max_bars"]
-            # Close at the end of the session so every trade stays inside it
-            sess_end = not in_sess[i] or i + 1 == len(d) or not in_sess[i + 1]
-            if hit_sl or hit_tp or timed or sess_end:
-                exit_px = sl if hit_sl else tp if hit_tp else c[i]
-                r = ((exit_px - entry) * pos - p["cost"]) / risk
-                trades.append((d.time.iloc[ebar], tday, pos, entry, exit_px, r))
+            # Stop first (conservative), then the targets in order
+            if (l[i] <= sl) if pos == 1 else (h[i] >= sl):
+                gain += (len(levels) - hits) * part * (sl - entry) * pos
+                hits_at_exit, exit_px, open_parts = hits, sl, 0
+            else:
+                while hits < len(levels) and ((h[i] >= levels[hits]) if pos == 1 else (l[i] <= levels[hits])):
+                    gain += part * (levels[hits] - entry) * pos
+                    hits += 1
+                open_parts = len(levels) - hits
+                timed = p["max_bars"] > 0 and i - ebar >= p["max_bars"]
+                # Close at the end of the session so every trade stays inside it
+                sess_end = not in_sess[i] or i + 1 == len(d) or not in_sess[i + 1]
+                exit_px = levels[-1]
+                if open_parts and (timed or sess_end):
+                    gain += open_parts * part * (c[i] - entry) * pos
+                    exit_px, open_parts = c[i], 0
+                hits_at_exit = hits
+                if open_parts and hits:
+                    sl = entry if hits == 1 else levels[hits - 2]
+            if not open_parts:
+                r = (gain - p["cost"]) / risk
+                trades.append((d.time.iloc[ebar], tday, pos, entry, exit_px, r, risk, abs(levels[-1] - entry),
+                               hits_at_exit >= 1, hits_at_exit))
                 pos, last_exit = 0, i
                 if tday == cur_day:
                     day_r += r
@@ -231,10 +254,74 @@ def simulate(d, p):
             pos = 1 if long_[i] else -1
             entry, ebar, tday = c[i], i, cur_day
             risk = risk_l[i] if pos == 1 else risk_s[i]
-            tp = entry + pos * (tp_l[i] if pos == 1 else tp_s[i])
             sl = entry - pos * risk
+            if ladder:
+                levels = [entry + pos * risk * t for t in ladder]
+            else:
+                levels = [entry + pos * (tp_l[i] if pos == 1 else tp_s[i])]
+            part, hits, gain = 1.0 / len(levels), 0, 0.0
             day_n += 1
-    return pd.DataFrame(trades, columns=["time", "day", "dir", "entry", "exit", "r"])
+    return pd.DataFrame(trades, columns=["time", "day", "dir", "entry", "exit", "r", "risk", "tpd", "tp1", "hits"])
+
+
+LOTS = dict(account=1800.0, daily_pct=2.5, contract=100.0, min_lot=0.01, lot_step=0.01,
+            recovery=True, max_steps=3, max_risk_pct=3.0, daily_loss_pct=5.0)
+
+
+def lot_sim(t, ladder=None, cfg=LOTS):
+    """Lot sizing of the indicator: one trade aims at the whole daily target (daily_pct of the
+    account), split over the four take profits of the ladder (equal parts). Recovery: after a
+    loss the next trade also aims to win back the day's losses, for at most max_steps losses
+    in a row and never risking more than max_risk_pct of the balance. Trades after the daily
+    target or the daily max loss are skipped, and so are trades whose minimum lot would risk
+    more than max_risk_pct. `t` must come from simulate() with the R-based
+    daily limits off; `contract` is the $ value of a 1.0 price move for 1 lot (gold: 100)."""
+    bal = cfg["account"]
+    rows, cur, day_cash, debt, steps, done = [], None, 0.0, 0.0, 0, False
+    target = cfg["account"] * cfg["daily_pct"] / 100
+    loss_cap = cfg["account"] * cfg["daily_loss_pct"] / 100
+    n_parts = len(ladder) if ladder else 1
+    avg_r = sum(ladder) / len(ladder) if ladder else None
+    step = cfg["lot_step"]
+    for tr in t.itertuples():
+        if tr.day != cur:
+            cur, day_cash, debt, steps, done = tr.day, 0.0, 0.0, 0, False
+        if done:
+            continue
+        need = target + (debt if cfg["recovery"] else 0.0)
+        full_move = tr.risk * avg_r if ladder else tr.tpd
+        part = max(cfg["min_lot"], round(need / (full_move * cfg["contract"]) / n_parts / step) * step)
+        max_part = np.floor(bal * cfg["max_risk_pct"] / 100 / (tr.risk * cfg["contract"]) / n_parts / step + 1e-9) * step
+        if max_part < cfg["min_lot"]:
+            continue  # even the minimum lot would risk more than max_risk_pct: skip the trade
+        lots = min(part, max_part) * n_parts
+        cash = tr.r * tr.risk * cfg["contract"] * lots
+        bal += cash
+        day_cash += cash
+        if cash < 0:
+            debt += -cash
+            steps += 1
+            if steps > cfg["max_steps"]:
+                debt, steps = 0.0, 0
+        else:
+            debt = max(0.0, debt - cash)
+            if debt == 0:
+                steps = 0
+        if day_cash >= target or day_cash <= -loss_cap:
+            done = True
+        rows.append((tr.time, tr.day, lots, cash, bal))
+    return pd.DataFrame(rows, columns=["time", "day", "lots", "cash", "balance"])
+
+
+def lot_summary(m, account):
+    if m.empty:
+        return {}
+    daily = m.groupby("day").cash.sum()
+    eq = pd.concat([pd.Series([account]), m.balance])
+    return dict(trades=len(m), final=round(float(m.balance.iloc[-1]), 2), net=round(float(m.cash.sum()), 2),
+                max_dd=round(float((eq.cummax() - eq).max()), 2), worst_day=round(float(daily.min()), 2),
+                best_day=round(float(daily.max()), 2), max_lot=round(float(m.lots.max()), 2),
+                target_days=int((daily >= account * LOTS["daily_pct"] / 100 - 1e-6).sum()), days=len(daily))
 
 
 def summary(t, days):
@@ -297,6 +384,9 @@ def main():
     ap.add_argument("--cost", type=float, help="round-trip cost in price units")
     ap.add_argument("--target-r", type=float, help="daily target in R (stop trading after it)")
     ap.add_argument("--loss-r", type=float, help="daily max loss in R (stop trading after it)")
+    ap.add_argument("--single-tp", action="store_true", help="one take profit instead of the 4-part ladder")
+    ap.add_argument("--lots", type=float, metavar="LOT_VALUE",
+                    help="also simulate the lot sizing on a $1800 account (LOT_VALUE = $ per 1.0 move per lot, gold 100)")
     ap.add_argument("--grid", action="store_true")
     ap.add_argument("--train", type=float, default=0.6, help="train share of the data for --grid")
     args = ap.parse_args()
@@ -312,6 +402,8 @@ def main():
                  ("daily_target_r", args.target_r), ("daily_loss_r", args.loss_r)):
         if v is not None:
             base[k] = v
+    if args.single_tp:
+        base["ladder"] = None
     if base["strategy"] == "orb" and base["session"] == "all":
         base["session"] = "ny"
     grid = ORB_GRID if base["strategy"] == "orb" else GRID
@@ -319,8 +411,14 @@ def main():
     df = resample(load(args.csv), tf)
     days = df.time.dt.date.nunique()
     print(f"{len(df)} bars of {tf}m, {days} days, {df.time.iloc[0]} -> {df.time.iloc[-1]}")
-    print("Settings:", {k: base[k] for k in ("strategy", "cost", *grid)})
+    print("Settings:", {k: base[k] for k in ("strategy", "cost", "max_bars", *grid)})
+    print("Take profits:", base.get("ladder") or "single")
     print("Result:", run(df, base))
+    if args.lots:
+        lim = dict(base, daily_target_r=0.0, daily_loss_r=0.0)
+        t = simulate(indicators(df, lim), lim)
+        print(f"TP1 reached: {t.tp1.mean() * 100:.1f}%")
+        print("Lots on $1800:", lot_summary(lot_sim(t, base.get("ladder"), dict(LOTS, contract=args.lots)), LOTS["account"]))
     if not args.grid:
         return
 
