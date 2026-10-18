@@ -11,12 +11,10 @@
 // equal to Properties → Initial capital so the dashboard and the tester agree.
 strategy("Khaled Scalp Pro", shorttitle = "KScalp", overlay = true, initial_capital = 10000, currency = currency.USD,
      process_orders_on_close = true, pyramiding = 0, max_lines_count = 500, max_labels_count = 500)
-
 // ───────────── Preset ─────────────
 grpP = "Market preset"
 presetIn = input.string("Auto", "Preset", options = ["Auto", "Gold", "Nasdaq", "Dow", "Silver", "Bitcoin", "Custom"], group = grpP,
      tooltip = "Auto picks the preset from the chart symbol (XAUUSD/GC, NAS100/NQ, US30/YM, XAGUSD/SI, BTC). Custom uses the settings below.")
-
 grpM = "Money management"
 accountSize    = input.float(10000, "Account size ($)", minval = 1, group = grpM)
 riskPct        = input.float(1.0, "Risk per trade (%)", minval = 0.01, step = 0.25, group = grpM)
@@ -27,7 +25,6 @@ pointValueIn   = input.float(0, "Value of 1.0 price move per 1 qty ($, 0 = symbo
      tooltip = "Used for the position size. 0 uses the symbol's point value (futures: contract multiplier, CFD/spot: usually 1 = one unit).")
 costIn         = input.float(-1, "Round-trip cost in price (-1 = preset)", group = grpM,
      tooltip = "Spread + commission + slippage per trade, in price units. Stats on the dashboard are after this cost.")
-
 grpC = "Custom settings (Preset = Custom)"
 stratIn     = input.string("Pullback", "Strategy", options = ["Pullback", "ORB"], group = grpC)
 sessIn      = input.string("All", "Session", options = ["All", "Asia", "London", "New York", "NY Cash"], group = grpC)
@@ -43,7 +40,6 @@ orbTpIn     = input.float(2.0, "ORB: take profit (x risk)", minval = 0.1, step =
 orbTrendIn  = input.bool(false, "ORB: only with the trend EMA", group = grpC)
 maxBarsIn   = input.int(20, "Max bars in trade (0 = off)", minval = 0, group = grpC)
 costCustom  = input.float(0, "Round-trip cost in price", minval = 0, group = grpC)
-
 grpI = "Indicator"
 fastLen     = input.int(9, "Fast EMA", minval = 1, group = grpI)
 slowLen     = input.int(21, "Slow EMA", minval = 1, group = grpI)
@@ -55,11 +51,150 @@ rsiPullHigh = input.int(60, "RSI pullback level (short)", minval = 50, maxval = 
 useVwap     = input.bool(true, "VWAP filter (ignored if no volume)", group = grpI)
 atrLen      = input.int(14, "ATR length", minval = 1, group = grpI)
 cooldown    = input.int(0, "Cooldown bars after a trade", minval = 0, group = grpI)
-
-grpD = "Display"
-showLevels = input.bool(true, "Show TP / SL lines", group = grpD)
+grpD = "العرض وترتيب الملصقات"
+showSignals = input.bool(true, "إظهار ملصقات الشراء والبيع", group = grpD)
+showLevels = input.bool(true, "إظهار خطوط الدخول والهدف والستوب", group = grpD)
+showLevelTags = input.bool(true, "إظهار ملصقات أسعار الدخول والهدف والستوب", group = grpD)
+showExitLabels = input.bool(true, "إظهار نتيجة الصفقة عند الخروج", group = grpD)
+keepHistoryLevels = input.bool(false, "إبقاء مستويات الصفقات السابقة", group = grpD,
+     tooltip = "عند إيقافه، تظهر مستويات الصفقة المفتوحة فقط، وتبقى إشارات الدخول والخروج للصفقات السابقة.")
+visibleTrades = input.int(5, "عدد الصفقات الظاهرة على الشارت", minval = 1, maxval = 80, group = grpD,
+     tooltip = "يتحكم بالرسومات فقط. جميع الصفقات تبقى محسوبة في الداش بورد واختبار الاستراتيجية.")
+levelOffset = input.int(6, "مسافة ملصقات الأسعار يمين الشموع", minval = 1, maxval = 50, group = grpD)
+tagSizeIn = input.string("صغير", "حجم الملصقات", options = ["صغير", "عادي", "كبير"], group = grpD)
 showSessBg = input.bool(true, "Shade the trading session", group = grpD)
 dashPosIn  = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = grpD)
+
+grpV = "الموفنق و VWAP"
+hideMaVwap = input.bool(false, "إخفاء الموفنق و VWAP معاً", group = grpV,
+     tooltip = "يخفي الخطوط من الشارت فقط. تبقى حسابات الفلاتر فعالة.")
+showMovingAverages = input.bool(true, "إظهار الموفنق", group = grpV)
+showVwapLine = input.bool(true, "إظهار خط VWAP", group = grpV)
+
+grpH = "تارقت اليوم والأسبوع والشهر"
+autoPeriodTargets = input.bool(true, "حساب تارقت الأسبوع والشهر من اليومي", group = grpH,
+     tooltip = "التارقت الأسبوعي = النسبة اليومية × أيام الأسبوع المحددة، والشهري = النسبة اليومية × أيام الشهر المحددة. الحساب خطي على رصيد بداية كل فترة. تارقت الأسبوع والشهر للمتابعة فقط.")
+weekGoalDays = input.int(5, "أيام حساب التارقت الأسبوعي", minval = 1, maxval = 7, group = grpH)
+monthGoalDays = input.int(20, "أيام حساب التارقت الشهري", minval = 1, maxval = 31, group = grpH)
+weekTargetIn = input.float(10.0, "تارقت الأسبوع اليدوي (%)، صفر = إيقاف", minval = 0, step = 0.5, group = grpH)
+monthTargetIn = input.float(40.0, "تارقت الشهر اليدوي (%)، صفر = إيقاف", minval = 0, step = 0.5, group = grpH)
+statsTzIn = input.string("تلقائي", "توقيت إحصاءات الفترات", options = ["تلقائي", "Asia/Kuwait", "America/New_York", "UTC"], group = grpH,
+     tooltip = "تلقائي: نيويورك للنازداك والداو، توقيت الجلسة لباقي الجلسات، والكويت للأسواق التي تعمل طوال اليوم. الأسبوع يبدأ الاثنين، والشهر تقويمي. أول فترة محمّلة تعتبر جزئية وتُستبعد من نسبة تحقيق الفترات الكاملة.")
+dashSizeIn = input.string("مضغوط", "حجم الداش بورد", options = ["مضغوط", "عادي"], group = grpH)
+
+// ───────────── Organized trade drawings ─────────────
+tagSize = switch tagSizeIn
+    "عادي" => size.normal
+    "كبير" => size.large
+    => size.small
+buyColor = color.rgb(0, 154, 117)
+sellColor = color.rgb(211, 64, 78)
+entryColor = color.rgb(53, 116, 176)
+
+// Keep each trade's drawings together, so deleting old drawings never affects statistics.
+type TradeVisual
+    int tradeNo = 0
+    line entryLine = na
+    line tpLine = na
+    line slLine = na
+    label entryTag = na
+    label tpTag = na
+    label slTag = na
+    label signalTag = na
+    label exitTag = na
+
+fDeleteLevels(TradeVisual v) =>
+    if not na(v.entryLine)
+        line.delete(v.entryLine)
+        v.entryLine := na
+    if not na(v.tpLine)
+        line.delete(v.tpLine)
+        v.tpLine := na
+    if not na(v.slLine)
+        line.delete(v.slLine)
+        v.slLine := na
+    if not na(v.entryTag)
+        label.delete(v.entryTag)
+        v.entryTag := na
+    if not na(v.tpTag)
+        label.delete(v.tpTag)
+        v.tpTag := na
+    if not na(v.slTag)
+        label.delete(v.slTag)
+        v.slTag := na
+
+fDeleteVisual(TradeVisual v) =>
+    fDeleteLevels(v)
+    if not na(v.signalTag)
+        label.delete(v.signalTag)
+    if not na(v.exitTag)
+        label.delete(v.exitTag)
+
+fMoveLevels(TradeVisual v, int rightX) =>
+    if not na(v.entryLine)
+        line.set_x2(v.entryLine, rightX)
+    if not na(v.tpLine)
+        line.set_x2(v.tpLine, rightX)
+    if not na(v.slLine)
+        line.set_x2(v.slLine, rightX)
+    if not na(v.entryTag)
+        label.set_x(v.entryTag, rightX)
+    if not na(v.tpTag)
+        label.set_x(v.tpTag, rightX)
+    if not na(v.slTag)
+        label.set_x(v.slTag, rightX)
+
+var array<TradeVisual> tradeVisuals = array.new<TradeVisual>()
+var TradeVisual activeVisual = na
+var int tradeCounter = 0
+
+// Each period keeps its own opening balance and fixed cash target.
+// Realized results belong to their exit period, including trades opened before a boundary.
+type PeriodResult
+    int periodKey = na
+    int startStamp = na
+    float startBalance = na
+    float targetCash = na
+    float cash = 0.0
+    float r = 0.0
+    int entries = 0
+    int closed = 0
+    int wins = 0
+    bool targetHit = false
+    bool complete = false
+
+type PeriodBook
+    PeriodResult current = na
+    PeriodResult previous = na
+    int fullPeriods = 0
+    int hitPeriods = 0
+
+fRollPeriod(PeriodBook book, int periodKey, int startStamp, float openingBalance, float goalPct) =>
+    if na(book.current)
+        // The loaded history may start halfway through a day, week or month.
+        book.current := PeriodResult.new(periodKey = periodKey, startStamp = startStamp,
+             startBalance = openingBalance, targetCash = openingBalance > 0 and goalPct > 0 ? openingBalance * goalPct / 100 : na)
+    else if book.current.periodKey != periodKey
+        book.previous := book.current
+        if book.previous.complete and book.previous.closed > 0
+            book.fullPeriods += 1
+            book.hitPeriods += book.previous.targetHit ? 1 : 0
+        book.current := PeriodResult.new(periodKey = periodKey, startStamp = startStamp,
+             startBalance = openingBalance, targetCash = openingBalance > 0 and goalPct > 0 ? openingBalance * goalPct / 100 : na,
+             complete = true)
+
+fAddPeriodResult(PeriodBook book, float cashResult, float rResult) =>
+    p = book.current
+    p.cash += cashResult
+    p.r += rResult
+    p.closed += 1
+    p.wins += cashResult > 0 ? 1 : 0
+    if not na(p.targetCash) and p.cash + 0.0000001 >= p.targetCash
+        p.targetHit := true
+
+var PeriodBook dayBook = PeriodBook.new()
+var PeriodBook weekBook = PeriodBook.new()
+var PeriodBook monthBook = PeriodBook.new()
 
 // ───────────── Resolve the preset ─────────────
 tk = str.upper(syminfo.ticker)
@@ -70,17 +205,19 @@ detected = str.contains(tk, "BTC") or str.contains(tk, "XBT") ? "Bitcoin" :
      str.contains(tk, "NAS") or str.contains(tk, "US100") or str.contains(tk, "USTEC") or str.contains(tk, "NDX") or rt == "NQ" or rt == "MNQ" ? "Nasdaq" :
      str.contains(tk, "US30") or str.contains(tk, "DJ") or str.contains(tk, "WS30") or rt == "YM" or rt == "MYM" ? "Dow" : "Custom"
 preset = presetIn == "Auto" ? detected : presetIn
-
+// Nasdaq and Dow always use the US cash session, including Custom settings on these symbols.
+isUsIndex = detected == "Nasdaq" or detected == "Dow" or preset == "Nasdaq" or preset == "Dow"
 stratName = switch preset
     "Dow"    => "ORB"
     "Silver" => "ORB"
     "Custom" => stratIn
     => "Pullback"
-sessName = switch preset
+sessChoice = switch preset
     "Dow"    => "New York"
     "Silver" => "London"
     "Custom" => stratName == "ORB" and sessIn == "All" ? "New York" : sessIn
     => "All"
+sessName = isUsIndex ? "NY Cash" : sessChoice
 recTf = switch preset
     "Gold"    => "3"
     "Nasdaq"  => "5"
@@ -144,7 +281,6 @@ presetCost = switch preset
     => costCustom
 cost = costIn >= 0 ? costIn : presetCost
 isOrb = stratName == "ORB"
-
 // Sessions (same definitions as backtest/backtest.py)
 sessFrom = switch sessName
     "Asia"     => 9 * 60
@@ -162,13 +298,42 @@ sessTz = switch sessName
     "Asia"   => "Asia/Tokyo"
     "London" => "Europe/London"
     => "America/New_York"
-// Minutes since midnight in the session's own time zone (handles daylight saving)
+// Minutes since midnight in the session's own time zone (handles daylight saving).
 sessMins = hour(time, sessTz) * 60 + minute(time, sessTz)
-inSess   = sessName == "All" or (sessMins >= sessFrom and sessMins < sessTo)
-newSess = sessName != "All" and inSess and not inSess[1]
-utcDay  = math.floor(time / 86400000)
-newDay  = sessName == "All" ? utcDay != utcDay[1] : newSess
-
+// Use New York calendar dates, so daily limits and the ORB also reset on regular-hours-only charts.
+usTz = "America/New_York"
+usYear = year(time, usTz)
+usMonth = month(time, usTz)
+usDay = dayofmonth(time, usTz)
+usDate = usYear * 10000 + usMonth * 100 + usDay
+usWeekday = dayofweek(time, usTz)
+usWorkday = usWeekday >= dayofweek.monday and usWeekday <= dayofweek.friday
+usOpen = timestamp(usTz, usYear, usMonth, usDay, 9, 30)
+usClose = timestamp(usTz, usYear, usMonth, usDay, 16, 0)
+usInSession = timeframe.isintraday and usWorkday and time >= usOpen and time < usClose
+inSess = isUsIndex ? usInSession : sessName == "All" or (sessMins >= sessFrom and sessMins < sessTo)
+newSess = sessName != "All" and inSess and (barstate.isfirst or not inSess[1] or (isUsIndex and usDate != usDate[1]))
+// Entries fill at bar close: exclude any candle closing at or after 16:00 New York.
+entrySessOpen = inSess and (not isUsIndex or (not na(time_close) and time_close < usClose))
+usSessionEnd = isUsIndex and inSess and not na(time_close) and time_close >= usClose
+// Period boundaries use bar-close dates, because orders execute on the closing tick.
+statsTz = statsTzIn == "تلقائي" ? (isUsIndex ? usTz : sessName == "All" ? "Asia/Kuwait" : sessTz) : statsTzIn
+statsClock = na(time_close) ? time : time_close
+statsYear = year(statsClock, statsTz)
+statsMonth = month(statsClock, statsTz)
+statsDay = dayofmonth(statsClock, statsTz)
+statsDow = dayofweek(statsClock, statsTz)
+// Use calendar dates as UTC day numbers. This avoids DST and week/year-boundary errors.
+dayKey = int(math.floor(timestamp("UTC", statsYear, statsMonth, statsDay, 0, 0) / 86400000))
+weekOffset = (statsDow + 5) % 7
+weekKey = dayKey - weekOffset
+monthKey = statsYear * 100 + statsMonth
+dayStamp = dayKey * 86400000
+weekStamp = weekKey * 86400000
+monthStamp = timestamp("UTC", statsYear, statsMonth, 1, 0, 0)
+newDay = barstate.isfirst or dayKey != dayKey[1]
+weekTargetPct = autoPeriodTargets ? dailyTargetPct * weekGoalDays : weekTargetIn
+monthTargetPct = autoPeriodTargets ? dailyTargetPct * monthGoalDays : monthTargetIn
 // ───────────── Calculations ─────────────
 emaF = ta.ema(close, fastLen)
 emaS = ta.ema(close, slowLen)
@@ -184,16 +349,13 @@ if timeframe.change("D")
 vwPV += hlc3 * nz(volume)
 vwV  += nz(volume)
 vwapVal = vwV > 0 ? vwPV / vwV : na
-
 // Non-repainting HTF values (previous closed HTF bar)
 htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1], lookahead = barmerge.lookahead_on)
 htfClose = request.security(syminfo.tickerid, htfTf, close[1], lookahead = barmerge.lookahead_on)
 htfUp    = not useHtf or htfClose > htfEma
 htfDown  = not useHtf or htfClose < htfEma
-
 trendUp   = emaF > emaS and emaS > emaT and close > emaT and htfUp
 trendDown = emaF < emaS and emaS < emaT and close < emaT and htfDown
-
 pulledLong  = nz(ta.barssince(low <= emaS), 9999) <= pullbackBars and ta.lowest(rsi, pullbackBars) < rsiPullLow
 pulledShort = nz(ta.barssince(high >= emaS), 9999) <= pullbackBars and ta.highest(rsi, pullbackBars) > rsiPullHigh
 trigLong  = close > emaF and close > open and close > high[1] and rsi > 50 and rsi < 80
@@ -201,16 +363,14 @@ trigShort = close < emaF and close < open and close < low[1] and rsi < 50 and rs
 vwapOkLong  = not useVwap or na(vwapVal) or close > vwapVal
 vwapOkShort = not useVwap or na(vwapVal) or close < vwapVal
 volOk = atr >= ta.sma(atr, 50) * minAtrRatio
-
 pbLong  = not isOrb and trendUp and pulledLong and trigLong and vwapOkLong and volOk
 pbShort = not isOrb and trendDown and pulledShort and trigShort and vwapOkShort and volOk
-
 // Opening range of the session
 var float orbHi = na
 var float orbLo = na
 var int   sessStart = na
 if newSess
-    sessStart := time
+    sessStart := isUsIndex ? usOpen : time
     orbHi := na
     orbLo := na
 inRangeWin = inSess and not na(sessStart) and time < sessStart + orbMinutes * 60000
@@ -221,12 +381,8 @@ orbReady = inSess and not na(sessStart) and time >= sessStart + orbMinutes * 600
 orbMid   = (orbHi + orbLo) / 2
 orbLong  = isOrb and orbReady and close > orbHi and close[1] <= orbHi and (not orbTrend or close > emaT)
 orbShort = isOrb and orbReady and close < orbLo and close[1] >= orbLo and (not orbTrend or close < emaT)
-
 // ───────────── Trade + money management ─────────────
 pointValue = pointValueIn > 0 ? pointValueIn : nz(syminfo.pointvalue, 1.0) > 0 ? nz(syminfo.pointvalue, 1.0) : 1.0
-targetR    = dailyTargetPct > 0 ? dailyTargetPct / riskPct : 0.0
-lossR      = dailyLossPct > 0 ? dailyLossPct / riskPct : 0.0
-
 var int   dir       = 0
 var float entry     = na
 var float tp        = na
@@ -235,11 +391,7 @@ var float riskDist  = na
 var float riskCash  = na
 var float qty       = na
 var int   entryBar  = na
-var int   entryDay  = na
 var int   lastExit  = -100000
-var line  tpLine    = na
-var line  slLine    = na
-
 var int   wins      = 0
 var int   losses    = 0
 var float grossWin  = 0.0
@@ -248,38 +400,28 @@ var float netR      = 0.0
 var float peakR     = 0.0
 var float maxDdR    = 0.0
 var float pnlCash   = 0.0
-
-var int   dayId     = 0
 var float dayR      = 0.0
 var float dayCash   = 0.0
 var int   dayTrades = 0
 var bool  dayDone   = false
 var string dayWhy   = ""
-var int   daysTotal = 0
-var int   daysGreen = 0
-var int   daysTarget = 0
-
+fRollPeriod(dayBook, dayKey, dayStamp, accountSize + pnlCash, dailyTargetPct)
+fRollPeriod(weekBook, weekKey, weekStamp, accountSize + pnlCash, weekTargetPct)
+fRollPeriod(monthBook, monthKey, monthStamp, accountSize + pnlCash, monthTargetPct)
+// Freeze the daily loss threshold on the same opening balance as the daily target.
+dayLossCash = dailyLossPct > 0 and dayBook.current.startBalance > 0 ? dayBook.current.startBalance * dailyLossPct / 100 : na
 if newDay
-    if dayTrades > 0
-        daysTotal += 1
-        daysGreen += dayR > 0 ? 1 : 0
-        daysTarget += dayWhy == "TARGET" ? 1 : 0
-    dayId     += 1
     dayR      := 0.0
     dayCash   := 0.0
     dayTrades := 0
     dayDone   := false
     dayWhy    := ""
-
 // 1) Manage the open trade (from the bar after entry)
 if dir != 0 and bar_index > entryBar
     hitSL    = dir == 1 ? low <= sl : high >= sl
     hitTP    = dir == 1 ? high >= tp : low <= tp
     timedOut = maxBars > 0 and bar_index - entryBar >= maxBars
-    sessOut  = not inSess
-    if showLevels
-        line.set_x2(tpLine, bar_index)
-        line.set_x2(slLine, bar_index)
+    sessOut  = not inSess or usSessionEnd
     if hitSL or hitTP or timedOut or sessOut
         // SL and TP inside one bar counts as a loss (conservative)
         exitPx = hitSL ? sl : hitTP ? tp : close
@@ -297,30 +439,43 @@ if dir != 0 and bar_index > entryBar
         else
             losses += 1
             grossLoss -= r
-        label.new(bar_index, dir == 1 ? high : low, (r >= 0 ? "+" : "") + str.tostring(r, "#.##") + "R",
-             style = label.style_none, textcolor = r > 0 ? color.lime : color.red, size = size.small)
-        if entryDay == dayId
-            dayR    += r
-            dayCash += cash
-            if targetR > 0 and dayR >= targetR
-                dayDone := true
-                dayWhy  := "TARGET"
-            else if lossR > 0 and dayR <= -lossR
-                dayDone := true
-                dayWhy  := "MAX LOSS"
-            else if maxTrades > 0 and dayTrades >= maxTrades
-                dayDone := true
-                dayWhy  := "MAX TRADES"
-            if dayDone
-                alert("KScalp " + syminfo.ticker + ": day closed (" + dayWhy + "), P&L " + str.tostring(dayCash, "#.##") + "$", alert.freq_once_per_bar_close)
+        if not na(activeVisual)
+            if showExitLabels
+                exitReason = hitSL ? "ستوب" : hitTP ? "تحقق الهدف" : sessOut ? "نهاية الجلسة" : "خروج بالوقت"
+                resultTxt = exitReason + " #" + str.tostring(activeVisual.tradeNo) + "\n" + (r >= 0 ? "+" : "") + str.tostring(r, "#.##") + "R"
+                resultTip = "سعر الخروج: " + str.tostring(exitPx, format.mintick) + "\nالنتيجة: " + str.tostring(cash, "#.##") + " $"
+                activeVisual.exitTag := label.new(bar_index, na, resultTxt,
+                     yloc = dir == 1 ? yloc.abovebar : yloc.belowbar,
+                     style = dir == 1 ? label.style_label_down : label.style_label_up,
+                     color = color.new(r > 0 ? buyColor : sellColor, 12),
+                     textcolor = color.white, size = tagSize, tooltip = resultTip)
+            // Stop historical levels at the exit candle. Active tags alone move to the right.
+            fMoveLevels(activeVisual, bar_index)
+            if not keepHistoryLevels
+                fDeleteLevels(activeVisual)
+            activeVisual := na
+        fAddPeriodResult(dayBook, cash, r)
+        fAddPeriodResult(weekBook, cash, r)
+        fAddPeriodResult(monthBook, cash, r)
+        dayR := dayBook.current.r
+        dayCash := dayBook.current.cash
+        if not na(dayBook.current.targetCash) and dayCash + 0.0000001 >= dayBook.current.targetCash
+            dayDone := true
+            dayWhy  := "TARGET"
+        else if not na(dayLossCash) and dayCash <= -dayLossCash
+            dayDone := true
+            dayWhy  := "MAX LOSS"
+        else if maxTrades > 0 and dayTrades >= maxTrades
+            dayDone := true
+            dayWhy  := "MAX TRADES"
+        if dayDone
+            alert("KScalp " + syminfo.ticker + ": day closed (" + dayWhy + "), P&L " + str.tostring(dayCash, "#.##") + "$", alert.freq_once_per_bar_close)
         dir      := 0
         lastExit := bar_index
-
 // 2) New signals — only on confirmed bars, inside the session, flat, and while the day is open
-canTrade = dir == 0 and not dayDone and inSess and bar_index - lastExit > cooldown and barstate.isconfirmed and atr > 0
+canTrade = dir == 0 and not dayDone and entrySessOpen and bar_index - lastExit > cooldown and barstate.isconfirmed and atr > 0
 longSig  = canTrade and (pbLong or orbLong)
 shortSig = canTrade and not longSig and (pbShort or orbShort)
-
 balance = accountSize + pnlCash
 if longSig or shortSig
     dir      := longSig ? 1 : -1
@@ -336,70 +491,196 @@ if longSig or shortSig
         strategy.entry(dir == 1 ? "Long" : "Short", dir == 1 ? strategy.long : strategy.short, qty = qty)
         strategy.exit("TP/SL", dir == 1 ? "Long" : "Short", stop = sl, limit = tp)
         entryBar  := bar_index
-        entryDay  := dayId
         dayTrades += 1
+        dayBook.current.entries += 1
+        weekBook.current.entries += 1
+        monthBook.current.entries += 1
+        tradeCounter += 1
+        activeVisual := TradeVisual.new(tradeNo = tradeCounter)
+        tradeIdTxt = str.tostring(tradeCounter)
+        tradeTip = "الدخول: " + str.tostring(entry, format.mintick) + "\nالهدف: " + str.tostring(tp, format.mintick) + "\nالستوب: " + str.tostring(sl, format.mintick)
+        if showSignals
+            activeVisual.signalTag := label.new(bar_index, na, (dir == 1 ? "شراء #" : "بيع #") + tradeIdTxt,
+                 yloc = dir == 1 ? yloc.belowbar : yloc.abovebar,
+                 style = dir == 1 ? label.style_label_up : label.style_label_down,
+                 color = dir == 1 ? buyColor : sellColor, textcolor = color.white,
+                 size = tagSize, tooltip = tradeTip)
         if showLevels
-            tpLine := line.new(bar_index, tp, bar_index + 1, tp, color = color.new(color.lime, 0), style = line.style_dashed)
-            slLine := line.new(bar_index, sl, bar_index + 1, sl, color = color.new(color.red, 0), style = line.style_dashed)
+            activeVisual.entryLine := line.new(bar_index, entry, bar_index + levelOffset, entry,
+                 color = color.new(entryColor, 25), style = line.style_dotted)
+            activeVisual.tpLine := line.new(bar_index, tp, bar_index + levelOffset, tp,
+                 color = buyColor, width = 2)
+            activeVisual.slLine := line.new(bar_index, sl, bar_index + levelOffset, sl,
+                 color = sellColor, style = line.style_dashed)
+        if showLevelTags
+            activeVisual.entryTag := label.new(bar_index + levelOffset, entry, "دخول #" + tradeIdTxt + " | " + str.tostring(entry, format.mintick),
+                 style = label.style_label_left, color = entryColor, textcolor = color.white, size = tagSize)
+            activeVisual.tpTag := label.new(bar_index + levelOffset, tp, "الهدف | " + str.tostring(tp, format.mintick),
+                 style = label.style_label_left, color = buyColor, textcolor = color.white, size = tagSize)
+            activeVisual.slTag := label.new(bar_index + levelOffset, sl, "الستوب | " + str.tostring(sl, format.mintick),
+                 style = label.style_label_left, color = sellColor, textcolor = color.white, size = tagSize)
+        array.push(tradeVisuals, activeVisual)
+        while array.size(tradeVisuals) > visibleTrades
+            fDeleteVisual(array.shift(tradeVisuals))
         alert("KScalp " + (dir == 1 ? "BUY " : "SELL ") + syminfo.ticker + " @ " + str.tostring(close, format.mintick) +
              " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) +
              " | Qty " + str.tostring(qty, "#.###") + " | Risk " + str.tostring(riskCash, "#.##") + "$", alert.freq_once_per_bar_close)
-entered = (longSig or shortSig) and dir != 0
+// Update the same labels instead of creating repeated labels on every candle.
+if dir != 0 and not na(activeVisual)
+    fMoveLevels(activeVisual, bar_index + levelOffset)
 
 // ───────────── Plots ─────────────
-plot(emaF, "Fast EMA", color.new(color.aqua, 0))
-plot(emaS, "Slow EMA", color.new(color.orange, 0))
-plot(emaT, "Trend EMA", color.new(color.gray, 0), 2)
-plot(useVwap and not isOrb ? vwapVal : na, "VWAP", color.new(color.purple, 30), style = plot.style_circles)
+plot(not hideMaVwap and showMovingAverages ? emaF : na, "Fast EMA", color.new(color.aqua, 0))
+plot(not hideMaVwap and showMovingAverages ? emaS : na, "Slow EMA", color.new(color.orange, 0))
+plot(not hideMaVwap and showMovingAverages ? emaT : na, "Trend EMA", color.new(color.gray, 0), 2)
+plot(not hideMaVwap and showVwapLine and not isOrb ? vwapVal : na, "VWAP", color.new(color.purple, 30), style = plot.style_circles)
 plot(isOrb and orbReady ? orbHi : na, "ORB high", color.new(color.teal, 0), 2, plot.style_linebr)
 plot(isOrb and orbReady ? orbLo : na, "ORB low", color.new(color.maroon, 0), 2, plot.style_linebr)
-
-plotshape(entered and dir == 1, "BUY", shape.labelup, location.belowbar, color.new(color.lime, 0), text = "BUY", textcolor = color.black, size = size.small)
-plotshape(entered and dir == -1, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0), text = "SELL", textcolor = color.white, size = size.small)
-
 bgcolor(showSessBg and sessName != "All" and inSess ? color.new(color.blue, 94) : na)
-
 // ───────────── Dashboard ─────────────
 fMoney(x) => (x >= 0 ? "+$" : "-$") + str.tostring(math.abs(x), "#,##0.00")
+
+fPeriodDates(PeriodResult p, string span) =>
+    string result = "—"
+    if not na(p)
+        result := span == "M" ? str.format_time(p.startStamp, "MM/yyyy", "UTC") : span == "W" ? str.format_time(p.startStamp, "dd/MM", "UTC") + " – " + str.format_time(p.startStamp + 6 * 86400000, "dd/MM", "UTC") : str.format_time(p.startStamp, "dd/MM/yyyy", "UTC")
+        if not p.complete
+            result += "\n(جزئي)"
+    result
+
+fPeriodPnl(PeriodResult p) =>
+    string result = "—"
+    if not na(p)
+        percent = p.startBalance > 0 ? p.cash * 100 / p.startBalance : 0.0
+        result := fMoney(p.cash) + "\n(" + str.tostring(percent, "#.##") + "%)"
+    result
+
+fPeriodTrades(PeriodResult p) =>
+    string result = "—"
+    if not na(p)
+        result := str.tostring(p.closed) + " | " + (p.closed > 0 ? str.tostring(p.wins * 100.0 / p.closed, "#.0") + "%" : "—")
+    result
+
+fGoalAmount(PeriodResult p) =>
+    string result = "غير مفعل"
+    if not na(p) and not na(p.targetCash)
+        goalPercent = p.startBalance > 0 ? p.targetCash * 100 / p.startBalance : 0.0
+        result := fMoney(p.targetCash) + "\n(" + str.tostring(goalPercent, "#.##") + "%)"
+    result
+
+fGoalState(PeriodResult p, bool pastPeriod) =>
+    string result = "—"
+    if not na(p)
+        if na(p.targetCash)
+            result := "غير مفعل"
+        else if pastPeriod and not p.complete
+            result := p.targetHit ? "تحقق بالجزء المحمّل" : "بيانات جزئية"
+        else if p.cash + 0.0000001 >= p.targetCash
+            result := "✓ متحقق"
+        else if p.targetHit
+            result := "تحقق ثم تراجع"
+        else if pastPeriod and p.closed == 0
+            result := "بدون صفقات"
+        else
+            result := pastPeriod ? "لم يتحقق" : "لم يتحقق بعد"
+        if not pastPeriod and not na(p.targetCash)
+            progress = math.max(0.0, math.min(100.0, p.cash * 100 / p.targetCash))
+            result += "\n" + str.tostring(progress, "#.0") + "%"
+    result
+
+fGoalColor(PeriodResult p, bool pastPeriod) =>
+    color result = color.silver
+    if not na(p) and not na(p.targetCash)
+        result := pastPeriod and not p.complete ? color.orange : p.cash + 0.0000001 >= p.targetCash ? color.lime : p.targetHit ? color.orange : pastPeriod ? color.red : color.silver
+    result
+
+fRemaining(PeriodResult p) =>
+    string result = "—"
+    if not na(p) and not na(p.targetCash)
+        result := "$" + str.tostring(math.max(p.targetCash - p.cash, 0), "#,##0.00")
+    result
+
+fPreviousCash(PeriodResult p) =>
+    string result = "—"
+    if not na(p)
+        result := fMoney(p.cash) + "\nهدف " + (na(p.targetCash) ? "غير مفعل" : fMoney(p.targetCash))
+    result
+
+fHistoryRate(PeriodBook book) =>
+    string result = "—"
+    if not na(book.current) and not na(book.current.targetCash) and book.fullPeriods > 0
+        result := str.tostring(book.hitPeriods) + " / " + str.tostring(book.fullPeriods) + "\n" + str.tostring(book.hitPeriods * 100.0 / book.fullPeriods, "#.0") + "%"
+    result
+
+fPnlColor(PeriodResult p) =>
+    na(p) ? color.silver : p.cash > 0 ? color.lime : p.cash < 0 ? color.red : color.silver
+
 dashPos = switch dashPosIn
     "Top left"     => position.top_left
     "Bottom right" => position.bottom_right
     "Bottom left"  => position.bottom_left
     => position.top_right
-var table dash = table.new(dashPos, 2, 14, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1)
-fRow(int row, string k, string v, color c) =>
-    table.cell(dash, 0, row, k, text_color = color.silver, text_size = size.small, text_halign = text.align_left)
-    table.cell(dash, 1, row, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+dashSize = dashSizeIn == "مضغوط" ? size.tiny : size.small
+var table dash = table.new(dashPos, 4, 20, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 75), border_width = 1)
+
+fCell(int col, int row, string cellTxt, color cellColor) =>
+    table.cell(dash, col, row, cellTxt, text_color = cellColor, text_size = dashSize,
+         text_halign = col == 0 ? text.align_right : text.align_center,
+         bgcolor = color.new(color.gray, row % 2 == 0 ? 92 : 100))
+
+fStatsRow(int row, string rowTitle, string dayTxt, string weekTxt, string monthTxt, color dayColor, color weekColor, color monthColor) =>
+    fCell(0, row, rowTitle, color.silver)
+    fCell(1, row, dayTxt, dayColor)
+    fCell(2, row, weekTxt, weekColor)
+    fCell(3, row, monthTxt, monthColor)
+
+fMergedRow(int row, string rowTitle, string rowValue, color rowColor) =>
+    fCell(0, row, rowTitle, color.silver)
+    fCell(1, row, rowValue, rowColor)
 
 if barstate.isfirst
-    table.merge_cells(dash, 0, 0, 1, 0)
-
+    table.merge_cells(dash, 0, 0, 3, 0)
+    table.merge_cells(dash, 1, 1, 3, 1)
+    table.merge_cells(dash, 1, 2, 3, 2)
+    table.merge_cells(dash, 0, 10, 3, 10)
+    table.merge_cells(dash, 1, 15, 3, 15)
+    table.merge_cells(dash, 1, 16, 3, 16)
+    table.merge_cells(dash, 1, 17, 3, 17)
+    table.merge_cells(dash, 1, 18, 3, 18)
+    table.merge_cells(dash, 0, 19, 3, 19)
 if barstate.islast
     tfOk     = timeframe.period == recTf
     total    = wins + losses
     winRate  = total > 0 ? wins * 100.0 / total : 0.0
     pf       = grossLoss > 0 ? grossWin / grossLoss : na
-    status   = dayDone ? (dayWhy == "TARGET" ? "✅ TARGET HIT" : dayWhy == "MAX LOSS" ? "⛔ MAX LOSS" : "⏸ MAX TRADES") :
-         not inSess ? "💤 SESSION CLOSED" : dir != 0 ? "📈 IN TRADE" : "🟢 TRADING"
-    statusC  = dayDone ? (dayWhy == "TARGET" ? color.lime : color.red) : not inSess ? color.gray : color.aqua
+    status   = dayDone ? (dayWhy == "TARGET" ? "تحقق تارقت اليوم" : dayWhy == "MAX LOSS" ? "بلوغ حد الخسارة" : "بلوغ عدد الصفقات") :
+         not entrySessOpen ? "الجلسة مغلقة" : dir != 0 ? "صفقة مفتوحة" : "بانتظار إشارة"
+    statusC  = dayDone ? (dayWhy == "TARGET" ? color.lime : color.red) : not entrySessOpen ? color.gray : color.aqua
     riskNow  = balance * riskPct / 100
     nextQty  = not isOrb and atr > 0 ? riskNow / (atr * slMult * pointValue) : na
-    stratTxt = isOrb ? "ORB " + str.tostring(orbMinutes) + "m, TP " + str.tostring(orbTp) + "R" :
-         "Pullback, TP " + str.tostring(tpMult) + " / SL " + str.tostring(slMult) + " ATR"
-    table.cell(dash, 0, 0, "KHALED SCALP PRO", text_color = color.white, text_size = size.normal)
-    fRow(1, "Market", preset + (presetIn == "Auto" ? " (auto)" : ""), color.white)
-    fRow(2, "Strategy", stratTxt, color.white)
-    fRow(3, "Timeframe", tfOk ? timeframe.period + " ✓" : timeframe.period + " → use " + recTf, tfOk ? color.lime : color.orange)
-    fRow(4, "Session", sessName + (sessName == "All" ? "" : inSess ? " (open)" : " (closed)"), inSess ? color.lime : color.gray)
-    fRow(5, "Today", status, statusC)
-    fRow(6, "Today P&L", fMoney(dayCash) + "  (" + str.tostring(dayR, "#.##") + "R, " + str.tostring(dayTrades) + " tr)", dayCash >= 0 ? color.lime : color.red)
-    fRow(7, "Target / max loss", (targetR > 0 ? fMoney(balance * dailyTargetPct / 100) : "off") + " / " + (lossR > 0 ? fMoney(-balance * dailyLossPct / 100) : "off"), color.white)
-    fRow(8, "Risk per trade", "$" + str.tostring(riskNow, "#,##0.00") + " (" + str.tostring(riskPct) + "%)", color.white)
-    fRow(9, dir != 0 ? "Open trade" : "Next size",
-         dir != 0 ? (dir == 1 ? "LONG " : "SHORT ") + str.tostring(qty, "#.###") + " | SL " + str.tostring(sl, format.mintick) + " | TP " + str.tostring(tp, format.mintick) :
-         na(nextQty) ? "set at breakout" : str.tostring(nextQty, "#.###") + " qty", color.white)
-    fRow(10, "Balance", "$" + str.tostring(balance, "#,##0.00") + " (" + fMoney(pnlCash) + ")", pnlCash >= 0 ? color.lime : color.red)
-    fRow(11, "Trades / win rate", str.tostring(total) + " / " + str.tostring(winRate, "#.0") + "%", color.white)
-    fRow(12, "Net / PF / max DD", str.tostring(netR, "#.#") + "R / " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " / " + str.tostring(maxDdR, "#.#") + "R",
-         netR >= 0 ? color.lime : color.red)
-    fRow(13, "Green days / target days", str.tostring(daysGreen) + " / " + str.tostring(daysTarget) + " of " + str.tostring(daysTotal), color.white)
+    marketTxt = preset + " | " + stratName + " | فريم " + timeframe.period + (tfOk ? " ✓" : " ← المقترح " + recTf)
+    sessionTxt = (isUsIndex ? "أمريكي 09:30–16:00 نيويورك" : sessName) + "\n" + status
+    table.cell(dash, 0, 0, "KHALED SCALP PRO", text_color = color.white, text_size = size.small, bgcolor = color.new(entryColor, 50))
+    fMergedRow(1, "السوق / الاستراتيجية", marketTxt, tfOk ? color.white : color.orange)
+    fMergedRow(2, "الجلسة / الحالة", sessionTxt, statusC)
+    fStatsRow(3, "الفترة", "اليوم", "الأسبوع", "الشهر", color.aqua, color.aqua, color.aqua)
+    fStatsRow(4, "التاريخ", fPeriodDates(dayBook.current, "D"), fPeriodDates(weekBook.current, "W"), fPeriodDates(monthBook.current, "M"), color.white, color.white, color.white)
+    fStatsRow(5, "صافي الربح", fPeriodPnl(dayBook.current), fPeriodPnl(weekBook.current), fPeriodPnl(monthBook.current), fPnlColor(dayBook.current), fPnlColor(weekBook.current), fPnlColor(monthBook.current))
+    fStatsRow(6, "مغلقة / نجاح", fPeriodTrades(dayBook.current), fPeriodTrades(weekBook.current), fPeriodTrades(monthBook.current), color.white, color.white, color.white)
+    fStatsRow(7, "التارقت", fGoalAmount(dayBook.current), fGoalAmount(weekBook.current), fGoalAmount(monthBook.current), color.aqua, color.aqua, color.aqua)
+    fStatsRow(8, "تحقق التارقت", fGoalState(dayBook.current, false), fGoalState(weekBook.current, false), fGoalState(monthBook.current, false), fGoalColor(dayBook.current, false), fGoalColor(weekBook.current, false), fGoalColor(monthBook.current, false))
+    fStatsRow(9, "المتبقي للتارقت", fRemaining(dayBook.current), fRemaining(weekBook.current), fRemaining(monthBook.current), color.white, color.white, color.white)
+    table.cell(dash, 0, 10, "نتائج الفترات السابقة", text_color = color.white, text_size = dashSize, bgcolor = color.new(entryColor, 65))
+    fStatsRow(11, "تاريخ الفترة السابقة", fPeriodDates(dayBook.previous, "D"), fPeriodDates(weekBook.previous, "W"), fPeriodDates(monthBook.previous, "M"), color.white, color.white, color.white)
+    fStatsRow(12, "صافي / تارقت السابق", fPreviousCash(dayBook.previous), fPreviousCash(weekBook.previous), fPreviousCash(monthBook.previous), fPnlColor(dayBook.previous), fPnlColor(weekBook.previous), fPnlColor(monthBook.previous))
+    fStatsRow(13, "هل تحقق بالسابق؟", fGoalState(dayBook.previous, true), fGoalState(weekBook.previous, true), fGoalState(monthBook.previous, true), fGoalColor(dayBook.previous, true), fGoalColor(weekBook.previous, true), fGoalColor(monthBook.previous, true))
+    fStatsRow(14, "حققت / فترات تداول", fHistoryRate(dayBook), fHistoryRate(weekBook), fHistoryRate(monthBook), color.white, color.white, color.white)
+    fMergedRow(15, "الرصيد / مخاطرة الصفقة", "$" + str.tostring(balance, "#,##0.00") + " | $" + str.tostring(riskNow, "#,##0.00") + " (" + str.tostring(riskPct, "#.##") + "%)", color.white)
+    openTxt = dir != 0 ? (dir == 1 ? "شراء" : "بيع") + " | دخول " + str.tostring(entry, format.mintick) + " | كمية " + str.tostring(qty, "#.###") + "\nهدف " + str.tostring(tp, format.mintick) + " | ستوب " + str.tostring(sl, format.mintick) : "لا توجد صفقة | الحجم القادم: " + (na(nextQty) ? "عند الاختراق" : str.tostring(nextQty, "#.###"))
+    fMergedRow(16, "الصفقة المفتوحة", openTxt, color.white)
+    limitsTxt = "حد الخسارة: " + (na(dayLossCash) ? "معطل" : fMoney(-dayLossCash)) + " | صفقات اليوم: " + str.tostring(dayTrades) + " / " + (maxTrades > 0 ? str.tostring(maxTrades) : "بلا حد")
+    fMergedRow(17, "حدود اليوم", limitsTxt, color.white)
+    totalTxt = "صفقات " + str.tostring(total) + " | نجاح " + str.tostring(winRate, "#.0") + "% | صافي " + fMoney(pnlCash) + "\n" + str.tostring(netR, "#.#") + "R | PF " + (na(pf) ? "—" : str.tostring(pf, "#.##")) + " | أقصى تراجع " + str.tostring(maxDdR, "#.#") + "R"
+    fMergedRow(18, "جميع البيانات", totalTxt, pnlCash >= 0 ? color.lime : color.red)
+    footerTxt = "صفقات مغلقة حتى آخر شمعة محمّلة | توقيت " + statsTz + "\nالفترات الجزئية مستبعدة من نسبة تحقيق الفترات."
+    table.cell(dash, 0, 19, footerTxt, text_color = color.silver, text_size = dashSize)
