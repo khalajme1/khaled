@@ -1,8 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              GoldScalperPro.mq5  |
-//|  Trend-pullback scalper for XAUUSD on M1 / M3 / M5               |
-//|  - Entry: pullback to fast EMA inside trend + RSI re-cross       |
-//|  - Exit : ATR-based SL, R-multiple TP, break-even + ATR trailing |
+//|  Scalper for XAUUSD on M1 / M3 / M5, two entry modes:            |
+//|  - STRETCH (default, best in walk-forward study on M1):          |
+//|    fade price stretched > N*ATR from EMA50 with extreme RSI      |
+//|  - PULLBACK: pullback to fast EMA inside trend + RSI re-cross    |
+//|  - Exit : ATR-based SL, R-multiple TP, optional BE/trail, time   |
 //|  - Risk : % risk per trade, daily target lock, daily loss limit, |
 //|           hard equity drawdown guard from peak (default 9%)      |
 //+------------------------------------------------------------------+
@@ -11,9 +13,21 @@
 
 #include <Trade\Trade.mqh>
 
+enum ENUM_GSP_STRATEGY
+  {
+   STRAT_STRETCH  = 0,   // Stretch mean-reversion
+   STRAT_PULLBACK = 1    // Trend pullback
+  };
+
 //--- Timeframe & signal
+input group "=== Strategy ==="
+input ENUM_GSP_STRATEGY InpStrategy    = STRAT_STRETCH; // Entry mode
+input double InpStretchAtr             = 4.0;         // STRETCH: distance from slow EMA in ATRs
+input double InpStretchRsi             = 25.0;        // STRETCH: buy if RSI < this, sell if RSI > 100 - this
+input int    InpMaxHoldBars            = 120;         // Close position after N bars (0 = off)
+
 input group "=== Timeframe & Signal ==="
-input ENUM_TIMEFRAMES InpTF            = PERIOD_M5;   // Working timeframe (M1 / M3 / M5)
+input ENUM_TIMEFRAMES InpTF            = PERIOD_M1;   // Working timeframe (M1 / M3 / M5)
 input ENUM_TIMEFRAMES InpHTF           = PERIOD_M15;  // Higher timeframe trend filter
 input int    InpEmaFast                = 20;          // Fast EMA (pullback line)
 input int    InpEmaSlow                = 50;          // Slow EMA
@@ -29,10 +43,10 @@ input double InpPullbackAtr            = 0.30;        // Pullback must touch fas
 
 //--- Exits
 input group "=== Exits ==="
-input double InpSlAtrMult              = 1.5;         // Stop loss = ATR * this
-input double InpTpR                    = 1.5;         // Take profit in R (multiple of SL)
-input double InpBeTriggerR             = 0.8;         // Move SL to break-even after this many R
-input double InpTrailStartR            = 1.0;         // Start ATR trailing after this many R
+input double InpSlAtrMult              = 3.0;         // Stop loss = ATR * this
+input double InpTpR                    = 0.75;        // Take profit in R (multiple of SL)
+input double InpBeTriggerR             = 99.0;        // Move SL to break-even after this many R (99 = off)
+input double InpTrailStartR            = 99.0;        // Start ATR trailing after this many R (99 = off)
 input double InpTrailAtrMult           = 1.0;         // Trailing distance = ATR * this
 
 //--- Cost filters
@@ -54,7 +68,7 @@ input bool   InpResetDDPeak            = false;       // Reset stored equity pea
 //--- Session
 input group "=== Session (server time) ==="
 input int    InpStartHour              = 9;           // Start trading hour
-input int    InpEndHour                = 20;          // Stop opening trades at this hour
+input int    InpEndHour                = 16;          // Stop opening trades at this hour
 input int    InpFridayCloseHour        = 20;          // Close everything Friday at this hour
 
 input group "=== Misc ==="
@@ -166,6 +180,23 @@ void CloseAll()
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == InpMagic)
+         trade.PositionClose(ticket);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Close positions held for InpMaxHoldBars bars or more             |
+//+------------------------------------------------------------------+
+void CloseExpired()
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      int held = iBarShift(_Symbol, InpTF, (datetime)PositionGetInteger(POSITION_TIME));
+      if(held >= InpMaxHoldBars)
          trade.PositionClose(ticket);
      }
   }
@@ -339,6 +370,8 @@ void OnTick()
    if(barTime == lastBarTime) return;
    lastBarTime = barTime;
    if(cooldownLeft > 0) cooldownLeft--;
+   if(InpMaxHoldBars > 0)
+      CloseExpired();
 
    string status = StringFormat("GoldScalperPro | TF %s | Day P/L %.2f%% | Trades %d | %s",
                                 EnumToString(InpTF),
@@ -377,19 +410,29 @@ void OnTick()
    double c1 = iClose(_Symbol, InpTF, 1);
    double htfClose = iClose(_Symbol, InpHTF, 1);
 
-   if(adx[0] < InpAdxMin) return;
+   bool buySig = false, sellSig = false;
+   if(InpStrategy == STRAT_STRETCH)
+     {
+      double z = (c1 - emaS[0]) / atr;                            // distance from slow EMA in ATRs
+      buySig  = z < -InpStretchAtr && rsi[0] < InpStretchRsi;
+      sellSig = z >  InpStretchAtr && rsi[0] > 100.0 - InpStretchRsi;
+     }
+   else
+     {
+      if(adx[0] < InpAdxMin) return;
 
-   bool upTrend   = emaF[0] > emaS[0] && emaS[0] > emaT[0] && c1 > emaT[0] && htfClose > htf[0];
-   bool downTrend = emaF[0] < emaS[0] && emaS[0] < emaT[0] && c1 < emaT[0] && htfClose < htf[0];
+      bool upTrend   = emaF[0] > emaS[0] && emaS[0] > emaT[0] && c1 > emaT[0] && htfClose > htf[0];
+      bool downTrend = emaF[0] < emaS[0] && emaS[0] < emaT[0] && c1 < emaT[0] && htfClose < htf[0];
 
-   bool buySig  = upTrend
-                  && l1 <= emaF[0] + atr * InpPullbackAtr         // pulled back to fast EMA
-                  && c1 > o1 && c1 > emaF[0]                      // bullish rejection candle
-                  && rsi[1] < InpRsiBuyLevel && rsi[0] >= InpRsiBuyLevel;
-   bool sellSig = downTrend
-                  && h1 >= emaF[0] - atr * InpPullbackAtr
-                  && c1 < o1 && c1 < emaF[0]
-                  && rsi[1] > InpRsiSellLevel && rsi[0] <= InpRsiSellLevel;
+      buySig  = upTrend
+                && l1 <= emaF[0] + atr * InpPullbackAtr           // pulled back to fast EMA
+                && c1 > o1 && c1 > emaF[0]                        // bullish rejection candle
+                && rsi[1] < InpRsiBuyLevel && rsi[0] >= InpRsiBuyLevel;
+      sellSig = downTrend
+                && h1 >= emaF[0] - atr * InpPullbackAtr
+                && c1 < o1 && c1 < emaF[0]
+                && rsi[1] > InpRsiSellLevel && rsi[0] <= InpRsiSellLevel;
+     }
 
    if(!buySig && !sellSig) return;
 
