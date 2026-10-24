@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-M5 strategy shoot-out with anchored walk-forward.
+Strategy shoot-out with anchored walk-forward, per timeframe (M1 / M3 / M5).
 
-    python research/m5_study.py --spread 0.26 --folds 5
+    python research/tf_study.py --tf 5 --spread 0.26 --folds 5
 
-Every parameter set of every family is simulated once over the full M5 history
+Every parameter set of every family is simulated once over the full history
 (daily guards off, one position at a time). Walk-forward then works on the trade
 lists: for each test window, the best set per family is chosen on all data
 before the window only (by t-stat of R, min trades), and its trades inside the
@@ -22,7 +22,7 @@ import pandas as pd
 from backtest import Params, build_features, load_m1, simulate
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(ROOT, "data", "XAUUSD-STD_M5.csv")
+DATA = os.path.join(ROOT, "data", "XAUUSD-STD_M{}.csv")
 
 LOOSE = dict(daily_target=100.0, daily_loss=100.0, max_dd=100.0, max_trades=40,
              max_consec_losses=99, cooldown_bars=0, be_r=99.0, trail_start_r=99.0)
@@ -40,13 +40,12 @@ GRIDS = {
                     tp_r=[0.5, 0.75, 1.0], exit_ema=[True, False]),
 }
 
-_DF = None
+_DF = {}
 
 
-def features():
-    global _DF
-    if _DF is None:
-        df = build_features(load_m1(DATA), Params(tf=5))
+def features(tf):
+    if tf not in _DF:
+        df = build_features(load_m1(DATA.format(tf)), Params(tf=tf))
         c = df["close"]
         df["bb_mid"] = c.rolling(20).mean()
         df["bb_sd"] = c.rolling(20).std()
@@ -54,8 +53,8 @@ def features():
             df[f"hh{n}"] = df["high"].rolling(n).max().shift()
             df[f"ll{n}"] = df["low"].rolling(n).min().shift()
         df["z"] = (c - df["ema_s"]) / df["atr"]
-        _DF = df
-    return _DF
+        _DF[tf] = df
+    return _DF[tf]
 
 
 def family_signals(df, fam, q, spread):
@@ -89,9 +88,9 @@ def family_signals(df, fam, q, spread):
 
 
 def run_combo(args):
-    fam, q, sess, spread = args
-    df = features()
-    p = Params(tf=5, start_hour=sess[0], end_hour=sess[1], **LOOSE)
+    tf, fam, q, sess, spread = args
+    df = features(tf)
+    p = Params(tf=tf, start_hour=sess[0], end_hour=sess[1], **LOOSE)
     p = replace(p, sl_atr=q["sl_atr"], tp_r=q["tp_r"])
     if fam == "pullback":
         p = replace(p, adx_min=q["adx_min"], rsi_buy=q["rsi"][0], rsi_sell=q["rsi"][1],
@@ -99,7 +98,7 @@ def run_combo(args):
         r = simulate(df, p, spread)
     else:
         b, s, xb, xs = family_signals(df, fam, q, spread)
-        p = replace(p, max_hold=24)
+        p = replace(p, max_hold=24 * 5 // tf)  # ~2 hours
         r = simulate(df, p, spread, b, s, xb, xs)
     t = r["_trades"]
     label = f"{fam} {sess[0]}-{sess[1]}h " + " ".join(f"{k}={v}" for k, v in q.items())
@@ -128,6 +127,7 @@ def equity_report(times, rs, days, risk):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--tf", type=int, choices=(1, 3, 5), default=5)
     ap.add_argument("--spread", type=float, default=0.26)
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--test-share", type=float, default=0.6, help="share of history used for test windows")
@@ -141,12 +141,12 @@ def main():
         for vals in itertools.product(*grid.values()):
             q = dict(zip(grid.keys(), vals))
             for sess in SESSIONS:
-                jobs.append((fam, q, sess, a.spread))
-    print(f"{len(jobs)} parameter sets over the full M5 history ...", flush=True)
+                jobs.append((a.tf, fam, q, sess, a.spread))
+    print(f"M{a.tf}: {len(jobs)} parameter sets over the full history ...", flush=True)
     with ProcessPoolExecutor() as ex:
         res = list(ex.map(run_combo, jobs, chunksize=8))
 
-    df = features()
+    df = features(a.tf)
     t0, t1 = df.index[0], df.index[-1]
     test_start = t0 + (t1 - t0) * (1 - a.test_share)
     edges = [test_start + (t1 - test_start) * i / a.folds for i in range(a.folds + 1)]
@@ -188,7 +188,7 @@ def main():
     pd.set_option("display.width", 250, "display.max_colwidth", 140)
     print("=== Stitched OUT-OF-SAMPLE results (walk-forward), spread", a.spread, "===")
     print(table.round(3).to_string())
-    table.to_csv(os.path.join(a.out, "m5_walkforward.csv"))
+    table.to_csv(os.path.join(a.out, f"m{a.tf}_walkforward.csv"))
 
     print("\n=== Parameter set chosen per fold (and its out-of-sample result) ===")
     for f in fams:
