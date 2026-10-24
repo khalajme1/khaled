@@ -154,7 +154,7 @@ def signals(df, p, spread):
 
 
 # ---------------------------------------------------------------------- simulator
-def simulate(df, p, spread, buy=None, sell=None):
+def simulate(df, p, spread, buy=None, sell=None, exit_buy=None, exit_sell=None):
     if buy is None:
         buy, sell = signals(df, p, spread)
     O, H, L, C, A = (df[k].values for k in ("open", "high", "low", "close", "atr"))
@@ -257,6 +257,10 @@ def simulate(df, p, spread, buy=None, sell=None):
                 break
             if p.max_hold and j - e + 1 >= p.max_hold:
                 exit_px, exit_i, reason = cl, j, "time"
+                break
+            ex = exit_buy if is_buy else exit_sell
+            if ex is not None and ex[j]:
+                exit_px, exit_i, reason = cl, j, "signal"
                 break
 
             # break-even / trailing (applies from next bar)
