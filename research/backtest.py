@@ -26,8 +26,11 @@ import pandas as pd
 
 # --------------------------------------------------------------------------- data
 def load_m1(path):
-    df = pd.read_csv(path)
-    df.columns = [c.strip().lower() for c in df.columns]
+    # accepts ExportM1Bars.mq5 output (comma) or MT5 Symbols -> Bars -> Export (tab, <DATE> <TIME> ...)
+    df = pd.read_csv(path, sep=None, engine="python", encoding_errors="ignore")
+    df.columns = [c.strip().strip("<>").lower() for c in df.columns]
+    if "date" in df.columns and "time" in df.columns:
+        df["time"] = df["date"].astype(str) + " " + df["time"].astype(str)
     if "time" not in df.columns:
         raise SystemExit("CSV needs a 'time' column")
     df["time"] = pd.to_datetime(df["time"].astype(str).str.replace(".", "-", regex=False))
