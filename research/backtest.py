@@ -117,6 +117,7 @@ class Params:
     start_hour: int = 9
     end_hour: int = 20
     friday_close_hour: int = 20
+    max_hold: int = 0  # bars; 0 = no time exit
 
 
 def build_features(m1, p):
@@ -153,8 +154,9 @@ def signals(df, p, spread):
 
 
 # ---------------------------------------------------------------------- simulator
-def simulate(df, p, spread):
-    buy, sell = signals(df, p, spread)
+def simulate(df, p, spread, buy=None, sell=None):
+    if buy is None:
+        buy, sell = signals(df, p, spread)
     O, H, L, C, A = (df[k].values for k in ("open", "high", "low", "close", "atr"))
     idx = df.index
     days = idx.normalize().values
@@ -252,6 +254,9 @@ def simulate(df, p, spread):
                 break
             if dows[j] == 4 and hours[j] >= p.friday_close_hour:
                 exit_px, exit_i, reason = cl, j, "friday"
+                break
+            if p.max_hold and j - e + 1 >= p.max_hold:
+                exit_px, exit_i, reason = cl, j, "time"
                 break
 
             # break-even / trailing (applies from next bar)
