@@ -1,0 +1,68 @@
+4320 parameter sets over the full M5 history ...
+History 2025-05-29 .. 2026-10-23; test windows from 2025-12-20, 5 folds
+
+=== Stitched OUT-OF-SAMPLE results (walk-forward), spread 0.26 ===
+              n     win  avg_r     pf      t  per_day  avg_day@0.5%  maxDD@0.5%  total@0.5%  avg_day@1.0%  maxDD@1.0%  total@1.0%  avg_day@2.0%  maxDD@2.0%  total@2.0%
+family                                                                                                                                                                 
+pullback    366  32.514 -0.041  0.936 -0.595    1.687        -0.035      21.177      -7.978        -0.070      38.519     -16.649        -0.142      63.747     -34.753
+breakout    849  39.223 -0.056  0.902 -1.412    3.912        -0.109      32.820     -22.140        -0.216      55.440     -41.048        -0.430      81.130     -68.900
+bb_touch    375  51.733 -0.063  0.850 -1.499    1.728        -0.054      14.955     -11.337        -0.109      28.062     -21.873        -0.219      49.356     -40.453
+bb_confirm  424  44.340 -0.120  0.762 -2.606    1.954        -0.118      24.203     -22.914        -0.236      43.092     -41.154        -0.472      68.826     -66.694
+stretch     634  53.312  0.011  1.027  0.322    2.922         0.017      11.989       2.933         0.035      22.752       4.725         0.076      41.086       4.675
+ALL         447  45.414 -0.054  0.889 -1.144    2.060        -0.056      20.203     -11.858        -0.112      36.743     -23.169        -0.227      61.027     -43.528
+
+=== Parameter set chosen per fold (and its out-of-sample result) ===
+
+[pullback]
+  2025-12-20: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=77 win=39.0% avgR=+0.155 PF=1.27
+  2026-02-20: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=63 win=36.5% avgR=+0.107 PF=1.18
+  2026-04-22: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=77 win=23.4% avgR=-0.304 PF=0.58
+  2026-06-23: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=72 win=33.3% avgR=-0.040 PF=0.94
+  2026-08-23: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=77 win=31.2% avgR=-0.097 PF=0.85
+
+[breakout]
+  2025-12-20: breakout 13-20h look=40 adx_min=30.0 sl_atr=2.0 tp_r=2.0  ->  n=93 win=32.3% avgR=-0.143 PF=0.77
+  2026-02-20: breakout 13-20h look=40 adx_min=30.0 sl_atr=1.5 tp_r=1.5  ->  n=116 win=32.8% avgR=-0.220 PF=0.66
+  2026-04-22: breakout 13-20h look=40 adx_min=30.0 sl_atr=1.5 tp_r=1.5  ->  n=122 win=33.6% avgR=-0.152 PF=0.75
+  2026-06-23: breakout 13-20h look=40 adx_min=30.0 sl_atr=1.5 tp_r=1.0  ->  n=169 win=49.7% avgR=-0.021 PF=0.96
+  2026-08-23: breakout 1-22h look=40 adx_min=25.0 sl_atr=2.0 tp_r=2.0  ->  n=349 win=40.1% avgR=+0.039 PF=1.07
+
+[bb_touch]
+  2025-12-20: bb_touch 9-20h k=3.0 rsi=30.0 adx_max=100.0 sl_atr=2.0 tp_r=1.0 exit_mid=False  ->  n=38 win=39.5% avgR=-0.245 PF=0.59
+  2026-02-20: bb_touch 9-20h k=2.0 rsi=30.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=55 win=47.3% avgR=-0.067 PF=0.83
+  2026-04-22: bb_touch 9-20h k=2.0 rsi=30.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=44 win=54.5% avgR=-0.033 PF=0.92
+  2026-06-23: bb_touch 9-16h k=2.0 rsi=100.0 adx_max=35.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=120 win=55.8% avgR=-0.034 PF=0.91
+  2026-08-23: bb_touch 9-16h k=2.0 rsi=100.0 adx_max=35.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=118 win=52.5% avgR=-0.041 PF=0.90
+
+[bb_confirm]
+  2025-12-20: bb_confirm 1-22h k=3.0 adx_max=100.0 sl_atr=2.0 tp_r=1.0 exit_mid=False  ->  n=40 win=40.0% avgR=-0.228 PF=0.61
+  2026-02-20: bb_confirm 1-22h k=2.0 adx_max=35.0 sl_atr=2.0 tp_r=1.5 exit_mid=False  ->  n=195 win=40.5% avgR=-0.062 PF=0.88
+  2026-04-22: bb_confirm 13-20h k=2.0 adx_max=25.0 sl_atr=2.0 tp_r=1.5 exit_mid=True  ->  n=31 win=61.3% avgR=-0.059 PF=0.83
+  2026-06-23: bb_confirm 9-16h k=2.0 adx_max=35.0 sl_atr=1.5 tp_r=1.5 exit_mid=True  ->  n=77 win=54.5% avgR=-0.040 PF=0.90
+  2026-08-23: bb_confirm 9-16h k=2.0 adx_max=35.0 sl_atr=1.5 tp_r=1.5 exit_mid=True  ->  n=81 win=39.5% avgR=-0.309 PF=0.46
+
+[stretch]
+  2025-12-20: stretch 13-20h m=4.0 rsi=100.0 sl_atr=2.0 tp_r=1.0 exit_ema=False  ->  n=45 win=48.9% avgR=-0.030 PF=0.94
+  2026-02-20: stretch 9-16h m=2.0 rsi=30.0 sl_atr=3.0 tp_r=1.0 exit_ema=False  ->  n=156 win=52.6% avgR=+0.020 PF=1.05
+  2026-04-22: stretch 9-16h m=2.0 rsi=30.0 sl_atr=3.0 tp_r=1.0 exit_ema=False  ->  n=148 win=54.7% avgR=+0.043 PF=1.11
+  2026-06-23: stretch 9-16h m=2.0 rsi=30.0 sl_atr=3.0 tp_r=1.0 exit_ema=False  ->  n=151 win=44.4% avgR=-0.126 PF=0.73
+  2026-08-23: stretch 13-20h m=2.0 rsi=25.0 sl_atr=3.0 tp_r=0.75 exit_ema=False  ->  n=134 win=64.2% avgR=+0.133 PF=1.43
+
+[ALL]
+  2025-12-20: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=77 win=39.0% avgR=+0.155 PF=1.27
+  2026-02-20: bb_touch 9-20h k=2.0 rsi=30.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=55 win=47.3% avgR=-0.067 PF=0.83
+  2026-04-22: pullback 13-20h sl_atr=1.0 tp_r=2.0 adx_min=20.0 rsi=(45.0, 55.0) be=99.0  ->  n=77 win=23.4% avgR=-0.304 PF=0.58
+  2026-06-23: bb_touch 9-16h k=2.0 rsi=100.0 adx_max=35.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=120 win=55.8% avgR=-0.034 PF=0.91
+  2026-08-23: bb_touch 9-16h k=2.0 rsi=100.0 adx_max=35.0 sl_atr=3.0 tp_r=0.75 exit_mid=False  ->  n=118 win=52.5% avgR=-0.041 PF=0.90
+
+=== Top-10 on full history (IN-SAMPLE, optimistic, for reference only) ===
+  t=2.55 n=26 win=73.1% avgR=+0.330 PF=2.70  bb_touch 9-16h k=3.0 rsi=25.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=False
+  t=2.50 n=36 win=75.0% avgR=+0.299 PF=2.27  bb_touch 9-16h k=3.0 rsi=100.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=True
+  t=2.50 n=36 win=75.0% avgR=+0.299 PF=2.27  bb_touch 9-16h k=3.0 rsi=100.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=False
+  t=2.42 n=26 win=76.9% avgR=+0.332 PF=2.53  bb_touch 9-16h k=3.0 rsi=25.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=True
+  t=2.42 n=26 win=76.9% avgR=+0.332 PF=2.53  bb_touch 9-16h k=3.0 rsi=25.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=False
+  t=2.35 n=35 win=74.3% avgR=+0.288 PF=2.18  bb_touch 9-16h k=3.0 rsi=30.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=True
+  t=2.35 n=35 win=74.3% avgR=+0.288 PF=2.18  bb_touch 9-16h k=3.0 rsi=30.0 adx_max=25.0 sl_atr=1.5 tp_r=0.75 exit_mid=False
+  t=2.29 n=35 win=71.4% avgR=+0.271 PF=2.19  bb_touch 9-16h k=3.0 rsi=30.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=False
+  t=2.28 n=26 win=76.9% avgR=+0.284 PF=2.51  bb_touch 9-16h k=3.0 rsi=25.0 adx_max=25.0 sl_atr=3.0 tp_r=0.75 exit_mid=True
+  t=2.18 n=8 win=87.5% avgR=+0.414 PF=4.51  bb_confirm 9-16h k=3.0 adx_max=25.0 sl_atr=1.0 tp_r=0.75 exit_mid=True
