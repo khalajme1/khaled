@@ -1,22 +1,23 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
-// Gann-style price & time cycle levels (Digital & Time analysis)
-// مستويات الدورة السعرية والزمنية (التحليل الرقمي والزمني)
+// Gann-style price & time cycle levels + automatic scenario (Digital & Time analysis)
+// التحليل الرقمي والزمني: مستويات الدورة السعرية والزمنية + شرح تلقائي للسيناريو المتوقع
 //
-// Price method "Range": 0° = start pivot, 360° = end pivot, levels are
-// interpolated on the square root of price:
-//     level(d) = ( sqrt(P0) + (sqrt(P360) - sqrt(P0)) * d / 360 )^2
+// Works automatically on any symbol / timeframe (gold, indices, stocks, crypto…):
+//   0°   = start of the current swing (the older extreme in the lookback window)
+//   360° = end of the swing (the newer extreme)
+// Price method "Range":       level(d) = ( sqrt(P0) + (sqrt(P360) - sqrt(P0)) * d / 360 )^2
 // Price method "Square of 9": level(d) = ( sqrt(P0) ± d / 180 )^2
 //@version=6
-indicator("Gann Cycle Levels (Price & Time)", "GannCycle", overlay = true, max_lines_count = 400, max_labels_count = 400, max_bars_back = 5000)
+indicator("Gann Cycle Levels + Scenario", "GannCycle", overlay = true, max_lines_count = 400, max_labels_count = 400, max_bars_back = 5000)
 
 // ───────── Inputs ─────────
 const string G1 = "Anchors / نقاط الارتكاز"
 anchorMode = input.string("Auto", "Anchor mode / طريقة الارتكاز", options = ["Auto", "Manual"], group = G1)
-lookback   = input.int(300, "Auto: lookback bars / عدد الشموع", minval = 10, maxval = 5000, group = G1)
-mStart     = input.price(4696.83, "Manual: 0° price / سعر البداية", group = G1)
-mStartT    = input.time(timestamp("2026-10-20T00:00+00:00"), "Manual: 0° time / وقت البداية", group = G1)
-mEnd       = input.price(3869.93, "Manual: 360° price / سعر نهاية الدورة", group = G1)
-mEndT      = input.time(timestamp("2026-11-03T00:00+00:00"), "Manual: 360° time / وقت نهاية الدورة", group = G1)
+lookback   = input.int(300, "Auto: lookback bars / عدد الشموع", minval = 10, maxval = 5000, group = G1, tooltip = "أعلى قمة وأدنى قاع في هذا العدد من الشموع. الأقدم منهما = 0° والأحدث = 360°")
+mStart     = input.price(0.0, "Manual: 0° price", group = G1)
+mStartT    = input.time(timestamp("2026-01-01T00:00+00:00"), "Manual: 0° time", group = G1)
+mEnd       = input.price(0.0, "Manual: 360° price", group = G1)
+mEndT      = input.time(timestamp("2026-01-02T00:00+00:00"), "Manual: 360° time", group = G1)
 
 const string G2 = "Price levels / المستويات السعرية"
 const string PM_RANGE = "Range: 0° → 360° between anchors"
@@ -36,26 +37,25 @@ timeMode  = input.string(TM_ANCHOR, "Method / الطريقة", options = [TM_ANC
 fixedDays = input.float(30.0, "Fixed cycle length (days)", minval = 0.1, group = G3)
 timeStep  = input.int(90, "Time degree step", options = [30, 36, 45, 60, 90, 120, 180, 360], group = G3)
 timeMax   = input.int(720, "Max time degrees", minval = 90, maxval = 1440, group = G3)
-tz        = input.string("Asia/Riyadh", "Label timezone", group = G3)
+tz        = input.string("Asia/Riyadh", "Timezone / المنطقة الزمنية", group = G3)
 
-const string G4 = "Style"
-c360   = input.color(color.red, "360° / cycle", group = G4)
-c90    = input.color(color.blue, "90° multiples", group = G4)
-cMinor = input.color(color.gray, "Other levels", group = G4)
-cTime  = input.color(color.white, "Time lines", group = G4)
+const string G4 = "Scenario / السيناريو"
+showPanel = input.bool(true, "Show scenario panel / لوحة السيناريو", group = G4)
+showArrow = input.bool(true, "Show projected path arrow / سهم المسار المتوقع", group = G4)
+emaLen    = input.int(20, "Momentum EMA length", minval = 2, group = G4)
+rsiLen    = input.int(14, "RSI length", minval = 2, group = G4)
+panelPos  = input.string("Top right", "Panel position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
 
-// ───────── Helpers ─────────
-levelAt(float p0, float p1, int deg) =>
-    float s0 = math.sqrt(p0)
-    float s  = na
-    if priceMode == PM_RANGE
-        s := s0 + (math.sqrt(p1) - s0) * deg / 360.0
-    else
-        s := s0 + (p1 < p0 ? -1.0 : 1.0) * deg / 180.0
-    s > 0 ? s * s : na
+const string G5 = "Style"
+c360   = input.color(color.red, "360° / cycle", group = G5)
+c90    = input.color(color.blue, "90° multiples", group = G5)
+cMinor = input.color(color.gray, "Other levels", group = G5)
+cTime  = input.color(color.white, "Time lines", group = G5)
+cArrow = input.color(color.yellow, "Projected path", group = G5)
 
-colorFor(int deg) =>
-    deg > 0 and deg % 360 == 0 ? c360 : deg % 90 == 0 ? c90 : cMinor
+// ───────── Momentum (computed every bar) ─────────
+float ema = ta.ema(close, emaLen)
+float rsi = ta.rsi(close, rsiLen)
 
 // ───────── Anchors ─────────
 int hiOff = nz(-ta.highestbars(high, lookback))
@@ -66,7 +66,7 @@ var float p1 = na
 var int   t0 = na
 var int   t1 = na
 
-if anchorMode == "Manual"
+if anchorMode == "Manual" and mStart > 0 and mEnd > 0
     p0 := mStart
     p1 := mEnd
     t0 := mStartT
@@ -78,9 +78,57 @@ else if bar_index >= lookback
     t0 := down ? time[hiOff] : time[loOff]
     t1 := down ? time[loOff] : time[hiOff]
 
-// ───────── Drawing (last bar only) ─────────
+// ───────── Helpers ─────────
+levelAt(float a0, float a1, int deg) =>
+    float s0 = math.sqrt(a0)
+    float s  = na
+    if priceMode == PM_RANGE
+        s := s0 + (math.sqrt(a1) - s0) * deg / 360.0
+    else
+        s := s0 + (a1 < a0 ? -1.0 : 1.0) * deg / 180.0
+    s > 0 ? s * s : na
+
+// price → its position in degrees inside the cycle
+degAt(float a0, float a1, float price) =>
+    float s0 = math.sqrt(a0)
+    float r  = na
+    if priceMode == PM_RANGE
+        float span = math.sqrt(a1) - s0
+        r := span != 0 ? (math.sqrt(price) - s0) / span * 360.0 : na
+    else
+        r := (math.sqrt(price) - s0) * 180.0 * (a1 < a0 ? -1.0 : 1.0)
+    r
+
+colorFor(int deg) =>
+    deg > 0 and deg % 360 == 0 ? c360 : deg % 90 == 0 ? c90 : cMinor
+
+nextAbove(array<float> arr, float x) =>
+    float r = na
+    for v in arr
+        if v > x and (na(r) or v < r)
+            r := v
+    r
+
+nextBelow(array<float> arr, float x) =>
+    float r = na
+    for v in arr
+        if v < x and (na(r) or v > r)
+            r := v
+    r
+
+fmtP(float x) =>
+    na(x) ? "—" : str.tostring(x, format.mintick)
+
+fmtLvl(float x) =>
+    na(x) ? "—" : str.tostring(math.round(degAt(p0, p1, x))) + "° = " + str.tostring(x, format.mintick)
+
+fmtT(int t) =>
+    na(t) ? "—" : str.format_time(t, "EEE dd MMM yy HH:mm", tz)
+
+// ───────── Drawing + scenario (last bar only) ─────────
 var array<line>  lns = array.new<line>()
 var array<label> lbs = array.new<label>()
+var table panel = table.new(panelPos == "Top right" ? position.top_right : panelPos == "Top left" ? position.top_left : panelPos == "Bottom right" ? position.bottom_right : position.bottom_left, 2, 12, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1, frame_color = color.gray, frame_width = 1)
 
 if barstate.islast and not na(p0) and not na(p1)
     for l in lns
@@ -90,30 +138,105 @@ if barstate.islast and not na(p0) and not na(p1)
     lns.clear()
     lbs.clear()
 
-    if showPrice
-        for d = 0 to maxDeg by stepDeg
-            float lv = levelAt(p0, p1, d)
-            if not na(lv)
+    // price levels
+    array<float> levels = array.new<float>()
+    for d = 0 to maxDeg by stepDeg
+        float lv = levelAt(p0, p1, d)
+        if not na(lv)
+            levels.push(lv)
+            if showPrice
                 color c   = colorFor(d)
                 bool  cyc = d > 0 and d % 360 == 0
                 lns.push(line.new(bar_index - 1, lv, bar_index, lv, extend = extLeft ? extend.both : extend.right, color = c, style = cyc ? line.style_solid : line.style_dotted, width = cyc ? 2 : 1))
                 lbs.push(label.new(bar_index + 3, lv, (cyc ? "CYCLE " : "") + str.tostring(d) + "° = " + str.tostring(lv, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
 
-    if showTime and not na(t0)
-        float cycMs = timeMode == TM_ANCHOR ? float(t1 - t0) : timeMode == TM_DAY ? 360.0 * 86400000.0 : fixedDays * 86400000.0
-        if cycMs > 0
-            float yLbl = math.min(p0, p1)
-            for d = timeStep to timeMax by timeStep
-                int t = t0 + int(cycMs * d / 360.0)
+    // time lines + the next upcoming time point
+    int tNext = na
+    int dNext = na
+    float cycMs = timeMode == TM_ANCHOR ? float(t1 - t0) : timeMode == TM_DAY ? 360.0 * 86400000.0 : fixedDays * 86400000.0
+    if cycMs > 0 and not na(t0)
+        float yLbl = math.min(p0, p1)
+        for d = timeStep to timeMax by timeStep
+            int t = t0 + int(cycMs * d / 360.0)
+            if na(tNext) and t > time_close
+                tNext := t
+                dNext := d
+            if showTime
                 lns.push(line.new(t, yLbl, t, yLbl * 1.001, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed))
-                lbs.push(label.new(t, yLbl, "T " + str.tostring(d) + "°\n" + str.format_time(t, "EEE dd MMM yy HH:mm", tz), xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small))
+                lbs.push(label.new(t, yLbl, "T " + str.tostring(d) + "°\n" + fmtT(t), xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small))
 
     // anchor markers
     lbs.push(label.new(t0, p0, "0°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_down : label.style_label_up, color = color.orange, textcolor = color.black, size = size.small))
     lbs.push(label.new(t1, p1, "360°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_up : label.style_label_down, color = color.orange, textcolor = color.black, size = size.small))
 
+    // ── scenario logic ──
+    float a1 = nextAbove(levels, close)
+    float a2 = na(a1) ? na : nextAbove(levels, a1)
+    float b1 = nextBelow(levels, close)
+    float b2 = na(b1) ? na : nextBelow(levels, b1)
+    float curDeg = degAt(p0, p1, close)
+    bool  cycleDown = p1 < p0
+
+    bool bull = close > ema and rsi > 50
+    bool bear = close < ema and rsi < 50
+    string bias = bull ? "صاعد ▲" : bear ? "هابط ▼" : "محايد ◆"
+
+    string scen = ""
+    float  tgt1 = na
+    float  tgt2 = na
+    string inval = ""
+    if bull
+        tgt1 := a1
+        tgt2 := a2
+        scen := cycleDown ? "ارتداد تصحيحي من قاع الدورة نحو المستوى الأعلى" : "استمرار الصعود مع اتجاه الدورة"
+        inval := "إغلاق تحت " + fmtLvl(b1)
+    else if bear
+        tgt1 := b1
+        tgt2 := b2
+        scen := cycleDown ? "استمرار الهبوط مع اتجاه الدورة" : "تصحيح هابط من قمة الدورة نحو المستوى الأدنى"
+        inval := "إغلاق فوق " + fmtLvl(a1)
+    else
+        scen := "تذبذب بين " + fmtP(b1) + " و " + fmtP(a1) + " — انتظر إغلاقاً خارج النطاق"
+        inval := "كسر أي من الحدين يحدد الاتجاه"
+
+    string timeTxt = na(tNext) ? "—" : "T " + str.tostring(dNext) + "°: " + fmtT(tNext)
+
+    // projected path arrow (like the hand-drawn yellow arrow)
+    if showArrow and not na(tgt1)
+        int tEnd = na(tNext) ? time_close + 20 * (time_close - time) : tNext
+        lns.push(line.new(time, close, tEnd, tgt1, xloc = xloc.bar_time, color = cArrow, width = 2, style = line.style_arrow_right))
+
+    if showPanel
+        panel.clear(0, 0, 1, 11)
+        color hc = color.new(color.orange, 20)
+        color tc = color.white
+        panel.cell(0, 0, "التحليل الرقمي والزمني", text_color = color.black, bgcolor = hc, text_size = size.small)
+        panel.cell(1, 0, syminfo.ticker + " · " + timeframe.period, text_color = color.black, bgcolor = hc, text_size = size.small)
+        panel.cell(0, 1, "بداية الدورة 0°", text_color = tc, text_size = size.small)
+        panel.cell(1, 1, fmtP(p0) + "  (" + fmtT(t0) + ")", text_color = tc, text_size = size.small)
+        panel.cell(0, 2, "نهاية الدورة 360°", text_color = tc, text_size = size.small)
+        panel.cell(1, 2, fmtP(p1) + "  (" + fmtT(t1) + ")", text_color = tc, text_size = size.small)
+        panel.cell(0, 3, "اتجاه الدورة", text_color = tc, text_size = size.small)
+        panel.cell(1, 3, cycleDown ? "هابطة" : "صاعدة", text_color = cycleDown ? color.red : color.lime, text_size = size.small)
+        panel.cell(0, 4, "السعر الآن", text_color = tc, text_size = size.small)
+        panel.cell(1, 4, fmtP(close) + "  عند " + str.tostring(math.round(curDeg)) + "°", text_color = tc, text_size = size.small)
+        panel.cell(0, 5, "مقاومة / دعم", text_color = tc, text_size = size.small)
+        panel.cell(1, 5, fmtLvl(a1) + "  /  " + fmtLvl(b1), text_color = tc, text_size = size.small)
+        panel.cell(0, 6, "الزخم", text_color = tc, text_size = size.small)
+        panel.cell(1, 6, bias + "  (RSI " + str.tostring(rsi, "#.0") + ")", text_color = bull ? color.lime : bear ? color.red : color.silver, text_size = size.small)
+        panel.cell(0, 7, "السيناريو المتوقع", text_color = color.yellow, text_size = size.small)
+        panel.cell(1, 7, scen, text_color = color.yellow, text_size = size.small)
+        panel.cell(0, 8, "الهدف الأول", text_color = tc, text_size = size.small)
+        panel.cell(1, 8, fmtLvl(tgt1), text_color = tc, text_size = size.small)
+        panel.cell(0, 9, "الهدف الثاني", text_color = tc, text_size = size.small)
+        panel.cell(1, 9, fmtLvl(tgt2), text_color = tc, text_size = size.small)
+        panel.cell(0, 10, "إلغاء السيناريو", text_color = tc, text_size = size.small)
+        panel.cell(1, 10, inval, text_color = tc, text_size = size.small)
+        panel.cell(0, 11, "الموعد الزمني القادم", text_color = tc, text_size = size.small)
+        panel.cell(1, 11, timeTxt + "  (منطقة انعكاس/تسارع محتملة)", text_color = tc, text_size = size.small)
+
 // ───────── Alerts: price crossing any level ─────────
-if barstate.isconfirmed and not na(p0) and not na(p1) and showPrice
+if barstate.isconfirmed and not na(p0) and not na(p1)
     for d = 0 to maxDeg by stepDeg
         float lv = levelAt(p0, p1, d)
         if not na(lv) and ((close[1] < lv and close >= lv) or (close[1] > lv and close <= lv))

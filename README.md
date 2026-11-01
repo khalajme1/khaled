@@ -8,14 +8,17 @@ The file `gann_cycle_levels.pine` (Pine Script v6) draws price levels by degree 
 1. In TradingView, open **Pine Editor**.
 2. Paste the contents of `gann_cycle_levels.pine`, then click **Add to chart**.
 
-### Settings
-- **Anchor mode**:
-  - `Auto`: uses the highest high and lowest low within the chosen number of bars. Whichever came first is 0° and the other is 360°.
-  - `Manual`: you enter the price and time of the starting point (0°) and of the cycle end (360°).
-- **Price method**:
-  - `Range`: splits the distance between the two points into 360°, using the square root of price. Defaults 0° = 4696.83 and 360° = 3869.93 reproduce the screenshot levels exactly (252° = 4109.6, 288° = 4028.91, 324° = 3949.02).
-  - `Square of 9`: the classic Gann method starting from the 0° point, where every 180° = one unit of the square root of price.
-- **Time cycle**: vertical lines for the expected dates, labeled with the date and time.
-- **Alerts**: create an alert on the indicator with "Any alert() function call" to be notified when price crosses any level.
+### How it works
+Put the indicator on any chart (gold, indices, stocks…) and it works automatically, with no need to enter numbers:
+- It finds the most recent cycle by itself: the highest high and lowest low within the chosen number of bars (the older one = 0°, the newer = 360°).
+- It draws the price levels by degree, and vertical time-cycle lines labeled with the date.
+- **Scenario panel** at the top of the chart: cycle direction, the current price's degree within the cycle, nearest support and resistance, momentum (EMA + RSI), the expected scenario, first and second targets, the invalidation condition, and the next time date.
+- **Yellow arrow** for the expected path from the current price to the first target, ending at the next time date.
 
-> For education only, not investment advice.
+### Settings
+- Anchor mode: `Auto` (default) or `Manual` to enter the 0° and 360° points yourself.
+- Price method: `Range` (splits the swing into 360° by the square root of price) or `Square of 9`.
+- Degree step (default 36°), timezone (default Riyadh), and position of the scenario panel.
+- Alerts: create an alert with "Any alert() function call" to be notified when price crosses any level.
+
+> The scenario is generated from simple rules (degree levels + momentum). For education only, not investment advice.
