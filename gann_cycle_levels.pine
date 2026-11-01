@@ -1,16 +1,18 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
-// Gann-style price & time cycle levels + automatic scenario (Digital & Time analysis)
-// التحليل الرقمي والزمني: مستويات الدورة السعرية والزمنية + شرح تلقائي للسيناريو المتوقع
+// Gann (digital & time) + Fibonacci + Liquidity + RSI + Multi-Timeframe → automatic scenario
+// التحليل الرقمي والزمني + فيبوناتشي + السيولة + RSI + الفريمات الأكبر → سيناريو متوقع تلقائي
 //
-// Works automatically on any symbol / timeframe (gold, indices, stocks, crypto…):
-//   0°   = start of the current swing (the older extreme in the lookback window)
-//   360° = end of the swing (the newer extreme)
-// Price method "Range":       level(d) = ( sqrt(P0) + (sqrt(P360) - sqrt(P0)) * d / 360 )^2
-// Price method "Square of 9": level(d) = ( sqrt(P0) ± d / 180 )^2
+// Works automatically on any symbol / timeframe:
+//   0°   = start of the current swing (older extreme inside the lookback window)
+//   360° = end of the swing (newer extreme)
+// Gann "Range":       level(d) = ( sqrt(P0) + (sqrt(P360) - sqrt(P0)) * d / 360 )^2
+// Gann "Square of 9": level(d) = ( sqrt(P0) ± d / 180 )^2
+// Fibonacci on the same swing: fib(r) = P360 + (P0 - P360) * r
+// Every component votes (+ bullish / − bearish); the total score decides the scenario.
 //@version=6
-indicator("Gann Cycle Levels + Scenario", "GannCycle", overlay = true, max_lines_count = 400, max_labels_count = 400, max_bars_back = 5000)
+indicator("Gann + Fib + Liquidity + RSI + MTF Scenario", "GannConfluence", overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back = 5000)
 
-// ───────── Inputs ─────────
+// ═════════ Inputs ═════════
 const string G1 = "Anchors / نقاط الارتكاز"
 anchorMode = input.string("Auto", "Anchor mode / طريقة الارتكاز", options = ["Auto", "Manual"], group = G1)
 lookback   = input.int(300, "Auto: lookback bars / عدد الشموع", minval = 10, maxval = 5000, group = G1, tooltip = "أعلى قمة وأدنى قاع في هذا العدد من الشموع. الأقدم منهما = 0° والأحدث = 360°")
@@ -19,16 +21,16 @@ mStartT    = input.time(timestamp("2026-01-01T00:00+00:00"), "Manual: 0° time",
 mEnd       = input.price(0.0, "Manual: 360° price", group = G1)
 mEndT      = input.time(timestamp("2026-01-02T00:00+00:00"), "Manual: 360° time", group = G1)
 
-const string G2 = "Price levels / المستويات السعرية"
+const string G2 = "Gann price levels / المستويات الرقمية"
 const string PM_RANGE = "Range: 0° → 360° between anchors"
 const string PM_SQ9   = "Square of 9 from 0° anchor"
-showPrice = input.bool(true, "Show price levels", group = G2)
+showPrice = input.bool(true, "Show Gann levels", group = G2)
 priceMode = input.string(PM_RANGE, "Method / الطريقة", options = [PM_RANGE, PM_SQ9], group = G2)
 stepDeg   = input.int(36, "Degree step / خطوة الدرجات", options = [15, 30, 36, 45, 60, 90, 120, 180], group = G2)
 maxDeg    = input.int(540, "Max degrees / أقصى درجة", minval = 90, maxval = 1440, group = G2)
 extLeft   = input.bool(true, "Extend lines left", group = G2)
 
-const string G3 = "Time cycle / الدورة الزمنية"
+const string G3 = "Gann time cycle / الدورة الزمنية"
 const string TM_ANCHOR = "Anchor-to-anchor duration = 360°"
 const string TM_DAY    = "1° = 1 calendar day"
 const string TM_FIXED  = "Fixed cycle (days) = 360°"
@@ -39,25 +41,71 @@ timeStep  = input.int(90, "Time degree step", options = [30, 36, 45, 60, 90, 120
 timeMax   = input.int(720, "Max time degrees", minval = 90, maxval = 1440, group = G3)
 tz        = input.string("Asia/Riyadh", "Timezone / المنطقة الزمنية", group = G3)
 
-const string G4 = "Scenario / السيناريو"
-showPanel = input.bool(true, "Show scenario panel / لوحة السيناريو", group = G4)
-showArrow = input.bool(true, "Show projected path arrow / سهم المسار المتوقع", group = G4)
-emaLen    = input.int(20, "Momentum EMA length", minval = 2, group = G4)
-rsiLen    = input.int(14, "RSI length", minval = 2, group = G4)
-panelPos  = input.string("Top right", "Panel position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
+const string G4 = "Fibonacci / فيبوناتشي"
+showFib = input.bool(true, "Show Fibonacci levels", group = G4)
 
-const string G5 = "Style"
-c360   = input.color(color.red, "360° / cycle", group = G5)
-c90    = input.color(color.blue, "90° multiples", group = G5)
-cMinor = input.color(color.gray, "Other levels", group = G5)
-cTime  = input.color(color.white, "Time lines", group = G5)
-cArrow = input.color(color.yellow, "Projected path", group = G5)
+const string G5 = "Liquidity / السيولة"
+showLiq   = input.bool(true, "Show liquidity pools (BSL / SSL)", group = G5)
+pivLen    = input.int(5, "Swing pivot length", minval = 2, maxval = 50, group = G5)
+sweepLook = input.int(10, "Sweep still valid for (bars)", minval = 1, group = G5)
+rvolLen   = input.int(20, "Relative volume length", minval = 5, group = G5)
 
-// ───────── Momentum (computed every bar) ─────────
-float ema = ta.ema(close, emaLen)
-float rsi = ta.rsi(close, rsiLen)
+const string G6 = "RSI"
+rsiLen  = input.int(14, "RSI length", minval = 2, group = G6)
+divLook = input.int(30, "Divergence still valid for (bars)", minval = 5, group = G6)
 
-// ───────── Anchors ─────────
+const string G7 = "Higher timeframes / الفريمات الأكبر"
+tfMode = input.string("Auto", "Higher TFs", options = ["Auto", "Manual"], group = G7, tooltip = "Auto يختار تلقائياً 3 فريمات أكبر من فريم الشارت")
+mTf1   = input.timeframe("60", "Manual HTF 1", group = G7)
+mTf2   = input.timeframe("240", "Manual HTF 2", group = G7)
+mTf3   = input.timeframe("D", "Manual HTF 3", group = G7)
+
+const string G8 = "Scenario / السيناريو"
+showPanel = input.bool(true, "Show scenario panel", group = G8)
+showArrow = input.bool(true, "Show projected path arrow", group = G8)
+tolMult   = input.float(0.35, "Confluence tolerance (× ATR)", minval = 0.05, step = 0.05, group = G8, tooltip = "مستويان أقرب من هذه المسافة يعتبران منطقة تلاقي قوية")
+panelPos  = input.string("Top right", "Panel position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G8)
+panelSize = input.string("Small", "Panel text size", options = ["Tiny", "Small", "Normal"], group = G8)
+
+const string G9 = "Style"
+c360   = input.color(color.red, "Gann 360°", group = G9)
+c90    = input.color(color.blue, "Gann 90° multiples", group = G9)
+cMinor = input.color(color.gray, "Gann other", group = G9)
+cFib   = input.color(color.purple, "Fibonacci", group = G9)
+cBsl   = input.color(color.new(color.red, 20), "Buy-side liquidity (BSL)", group = G9)
+cSsl   = input.color(color.new(color.green, 20), "Sell-side liquidity (SSL)", group = G9)
+cTime  = input.color(color.white, "Time lines", group = G9)
+cArrow = input.color(color.yellow, "Projected path", group = G9)
+
+// ═════════ Core series ═════════
+float atr   = ta.atr(14)
+float tol   = atr * tolMult
+float emaF  = ta.ema(close, 20)
+float emaS  = ta.ema(close, 50)
+float rsi   = ta.rsi(close, rsiLen)
+bool  hasVol = ta.cum(nz(volume)) > 0
+float rvol  = hasVol ? volume / ta.sma(volume, rvolLen) : na
+float obv   = ta.obv
+float obvMa = ta.ema(obv, 20)
+
+// ═════════ Higher timeframes ═════════
+int secs = timeframe.in_seconds()
+string aTf1 = secs <= 300 ? "15" : secs <= 900 ? "60" : secs <= 3600 ? "240" : secs <= 14400 ? "D" : secs <= 86400 ? "W" : "M"
+string aTf2 = secs <= 300 ? "60" : secs <= 900 ? "240" : secs <= 3600 ? "D" : secs <= 14400 ? "W" : "M"
+string aTf3 = secs <= 300 ? "240" : secs <= 900 ? "D" : secs <= 3600 ? "W" : "M"
+string tf1 = tfMode == "Auto" ? aTf1 : mTf1
+string tf2 = tfMode == "Auto" ? aTf2 : mTf2
+string tf3 = tfMode == "Auto" ? aTf3 : mTf3
+
+htfTrend(string tf) =>
+    request.security(syminfo.tickerid, tf, close > ta.ema(close, 50) and ta.ema(close, 20) > ta.ema(close, 50) ? 1 : close < ta.ema(close, 50) and ta.ema(close, 20) < ta.ema(close, 50) ? -1 : 0)
+
+int h1 = nz(htfTrend(tf1))
+int h2 = nz(htfTrend(tf2))
+int h3 = nz(htfTrend(tf3))
+int ctTrend = close > emaS and emaF > emaS ? 1 : close < emaS and emaF < emaS ? -1 : 0
+
+// ═════════ Anchors ═════════
 int hiOff = nz(-ta.highestbars(high, lookback))
 int loOff = nz(-ta.lowestbars(low, lookback))
 
@@ -78,7 +126,70 @@ else if bar_index >= lookback
     t0 := down ? time[hiOff] : time[loOff]
     t1 := down ? time[loOff] : time[hiOff]
 
-// ───────── Helpers ─────────
+bool cycleDown = p1 < p0
+
+// ═════════ Liquidity: swing pools + sweeps ═════════
+var array<float> bsl = array.new<float>()     // unswept swing highs
+var array<float> ssl = array.new<float>()     // unswept swing lows
+var int   sweepBar = na
+var int   sweepDir = 0                        // +1 = sell-side swept (bullish), -1 = buy-side swept (bearish)
+var float sweepLvl = na
+
+float ph = ta.pivothigh(high, pivLen, pivLen)
+float pl = ta.pivotlow(low, pivLen, pivLen)
+if not na(ph)
+    bsl.push(ph)
+    if bsl.size() > 10
+        bsl.shift()
+if not na(pl)
+    ssl.push(pl)
+    if ssl.size() > 10
+        ssl.shift()
+
+if bsl.size() > 0
+    for i = bsl.size() - 1 to 0
+        float v = bsl.get(i)
+        if high > v
+            if close < v
+                sweepBar := bar_index
+                sweepDir := -1
+                sweepLvl := v
+            bsl.remove(i)
+if ssl.size() > 0
+    for i = ssl.size() - 1 to 0
+        float v = ssl.get(i)
+        if low < v
+            if close > v
+                sweepBar := bar_index
+                sweepDir := 1
+                sweepLvl := v
+            ssl.remove(i)
+
+bool sweepActive = not na(sweepBar) and bar_index - sweepBar <= sweepLook
+
+// ═════════ RSI divergence ═════════
+var float prevPlP = na
+var float prevPlR = na
+var float prevPhP = na
+var float prevPhR = na
+var int   bullDivBar = na
+var int   bearDivBar = na
+if not na(pl)
+    float r0 = rsi[pivLen]
+    if not na(prevPlP) and pl < prevPlP and r0 > prevPlR
+        bullDivBar := bar_index
+    prevPlP := pl
+    prevPlR := r0
+if not na(ph)
+    float r0 = rsi[pivLen]
+    if not na(prevPhP) and ph > prevPhP and r0 < prevPhR
+        bearDivBar := bar_index
+    prevPhP := ph
+    prevPhR := r0
+bool bullDiv = not na(bullDivBar) and bar_index - bullDivBar <= divLook
+bool bearDiv = not na(bearDivBar) and bar_index - bearDivBar <= divLook
+
+// ═════════ Helpers ═════════
 levelAt(float a0, float a1, int deg) =>
     float s0 = math.sqrt(a0)
     float s  = na
@@ -88,7 +199,6 @@ levelAt(float a0, float a1, int deg) =>
         s := s0 + (a1 < a0 ? -1.0 : 1.0) * deg / 180.0
     s > 0 ? s * s : na
 
-// price → its position in degrees inside the cycle
 degAt(float a0, float a1, float price) =>
     float s0 = math.sqrt(a0)
     float r  = na
@@ -102,33 +212,156 @@ degAt(float a0, float a1, float price) =>
 colorFor(int deg) =>
     deg > 0 and deg % 360 == 0 ? c360 : deg % 90 == 0 ? c90 : cMinor
 
-nextAbove(array<float> arr, float x) =>
-    float r = na
-    for v in arr
-        if v > x and (na(r) or v < r)
-            r := v
-    r
+idxAbove(array<float> arr, float x) =>
+    int   k    = -1
+    float best = na
+    for [i, v] in arr
+        if v > x and (na(best) or v < best)
+            best := v
+            k := i
+    k
 
-nextBelow(array<float> arr, float x) =>
-    float r = na
-    for v in arr
-        if v < x and (na(r) or v > r)
-            r := v
-    r
+idxBelow(array<float> arr, float x) =>
+    int   k    = -1
+    float best = na
+    for [i, v] in arr
+        if v < x and (na(best) or v > best)
+            best := v
+            k := i
+    k
+
+// all sources that sit within tolerance of a price → "جان 324° + فيبو 0.618"
+nameAt(array<float> P, array<string> N, float x, float tl) =>
+    string s = ""
+    int    n = 0
+    for [i, v] in P
+        if math.abs(v - x) <= tl
+            s := s + (n > 0 ? " + " : "") + N.get(i)
+            n += 1
+    [s, n]
 
 fmtP(float x) =>
     na(x) ? "—" : str.tostring(x, format.mintick)
 
-fmtLvl(float x) =>
-    na(x) ? "—" : str.tostring(math.round(degAt(p0, p1, x))) + "° = " + str.tostring(x, format.mintick)
-
 fmtT(int t) =>
     na(t) ? "—" : str.format_time(t, "EEE dd MMM yy HH:mm", tz)
 
-// ───────── Drawing + scenario (last bar only) ─────────
+trendTxt(int t) =>
+    t > 0 ? "▲ صاعد" : t < 0 ? "▼ هابط" : "◆ محايد"
+
+trendCol(int t) =>
+    t > 0 ? color.lime : t < 0 ? color.red : color.silver
+
+fibName(float r) =>
+    r < 0 ? "فيبو امتداد " + str.tostring(1 - r, "#.###") : "فيبو " + str.tostring(r, "#.###")
+
+// ═════════ Candidate levels (Gann + Fib + Liquidity) ═════════
+var array<float> FIB_R = array.from(-0.618, -0.272, 0.236, 0.382, 0.5, 0.618, 0.786)
+
+array<float>  cP = array.new<float>()
+array<string> cN = array.new<string>()
+if not na(p0) and not na(p1)
+    for d = 0 to maxDeg by stepDeg
+        float lv = levelAt(p0, p1, d)
+        if not na(lv)
+            cP.push(lv)
+            cN.push("جان " + str.tostring(d) + "°")
+    for r in FIB_R
+        cP.push(p1 + (p0 - p1) * r)
+        cN.push(fibName(r))
+for v in bsl
+    cP.push(v)
+    cN.push("سيولة BSL")
+for v in ssl
+    cP.push(v)
+    cN.push("سيولة SSL")
+
+// ═════════ Scoring (each component votes) ═════════
+float score = 0.0
+float maxScore = 0.0
+string reasons = ""
+
+// 1) Higher timeframes (weights 1, 1, 1.5)
+score += h1 * 1.0 + h2 * 1.0 + h3 * 1.5
+maxScore += 3.5
+int htfUp = (h1 > 0 ? 1 : 0) + (h2 > 0 ? 1 : 0) + (h3 > 0 ? 1 : 0)
+int htfDn = (h1 < 0 ? 1 : 0) + (h2 < 0 ? 1 : 0) + (h3 < 0 ? 1 : 0)
+reasons += "• الفريمات الأكبر: " + str.tostring(htfUp) + " صاعد / " + str.tostring(htfDn) + " هابط\n"
+
+// 2) Current timeframe trend
+score += ctTrend * 1.0
+maxScore += 1.0
+
+// 3) RSI level + divergence
+float rsiSig = rsi > 55 ? 1.0 : rsi < 45 ? -1.0 : 0.0
+rsiSig += rsi > 70 ? -0.5 : rsi < 30 ? 0.5 : 0.0
+rsiSig += bullDiv ? 1.0 : 0.0
+rsiSig += bearDiv ? -1.0 : 0.0
+score += rsiSig
+maxScore += 2.0
+if bullDiv
+    reasons += "• دايفرجنس إيجابي على RSI\n"
+if bearDiv
+    reasons += "• دايفرجنس سلبي على RSI\n"
+if rsi > 70
+    reasons += "• RSI تشبع شراء\n"
+if rsi < 30
+    reasons += "• RSI تشبع بيع\n"
+
+// 4) Fibonacci position inside the swing (0 = 360° end, 1 = 0° start)
+float fibPos = p0 != p1 ? (close - p1) / (p0 - p1) : na
+float fibSig = 0.0
+string fibTxt = "—"
+if not na(fibPos)
+    fibTxt := fibPos < 0 ? "امتداد بعد نهاية الدورة" : fibPos < 0.382 ? "ارتداد ضعيف" : fibPos < 0.5 ? "ارتداد متوسط" : fibPos <= 0.618 ? "المنطقة الذهبية 0.5–0.618" : fibPos <= 0.786 ? "ارتداد عميق" : fibPos <= 1 ? "قرب بداية الدورة" : "تجاوز بداية الدورة"
+    fibTxt += " (" + str.tostring(fibPos, "#.###") + ")"
+    if fibPos >= 0.5 and fibPos <= 0.618
+        fibSig := cycleDown ? -1.0 : 1.0          // retracement done → resume cycle direction
+        reasons += "• السعر في المنطقة الذهبية → احتمال عودة لاتجاه الدورة\n"
+    else if fibPos > 0.786
+        fibSig := cycleDown ? 1.0 : -1.0          // deep retracement → cycle failing
+        reasons += "• ارتداد أعمق من 0.786 → ضعف اتجاه الدورة\n"
+score += fibSig
+maxScore += 1.0
+
+// 5) Reaction at nearest Gann/Fib/Liquidity level (bounce or rejection)
+int iSup = idxBelow(cP, close)
+int iRes = idxAbove(cP, close)
+float sup = iSup >= 0 ? cP.get(iSup) : na
+float res = iRes >= 0 ? cP.get(iRes) : na
+[supName, supN] = nameAt(cP, cN, sup, tol)
+[resName, resN] = nameAt(cP, cN, res, tol)
+float lvlSig = 0.0
+if not na(sup) and low <= sup + tol and close > sup
+    lvlSig := supN > 1 ? 1.5 : 1.0
+    reasons += "• ارتداد من دعم " + supName + (supN > 1 ? " (تلاقي قوي)" : "") + "\n"
+else if not na(res) and high >= res - tol and close < res
+    lvlSig := resN > 1 ? -1.5 : -1.0
+    reasons += "• رفض من مقاومة " + resName + (resN > 1 ? " (تلاقي قوي)" : "") + "\n"
+score += lvlSig
+maxScore += 1.5
+
+// 6) Liquidity: recent sweep + volume flow
+float liqSig = sweepActive ? sweepDir * 1.5 : 0.0
+if sweepActive
+    reasons += sweepDir > 0 ? "• سحب سيولة القيعان (SSL) عند " + fmtP(sweepLvl) + " → إشارة صعود\n" : "• سحب سيولة القمم (BSL) عند " + fmtP(sweepLvl) + " → إشارة هبوط\n"
+float volSig = 0.0
+if hasVol
+    volSig := obv > obvMa ? 0.5 : -0.5
+    if rvol > 1.5
+        volSig += close > open ? 0.5 : -0.5
+        reasons += "• حجم تداول مرتفع (" + str.tostring(rvol, "#.#") + "x) " + (close > open ? "شرائي" : "بيعي") + "\n"
+score += liqSig + volSig
+maxScore += 1.5 + (hasVol ? 1.0 : 0.0)
+
+int   biasDir = score >= 1.0 ? 1 : score <= -1.0 ? -1 : 0
+float conf    = maxScore > 0 ? math.min(100.0, math.abs(score) / maxScore * 100.0) : 0.0
+string biasTxt = score >= 3.0 ? "صاعد قوي ▲▲" : score >= 1.0 ? "صاعد ▲" : score <= -3.0 ? "هابط قوي ▼▼" : score <= -1.0 ? "هابط ▼" : "محايد ◆"
+
+// ═════════ Drawing + panel (last bar only) ═════════
 var array<line>  lns = array.new<line>()
 var array<label> lbs = array.new<label>()
-var table panel = table.new(panelPos == "Top right" ? position.top_right : panelPos == "Top left" ? position.top_left : panelPos == "Bottom right" ? position.bottom_right : position.bottom_left, 2, 12, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1, frame_color = color.gray, frame_width = 1)
+var table panel = table.new(panelPos == "Top right" ? position.top_right : panelPos == "Top left" ? position.top_left : panelPos == "Bottom right" ? position.bottom_right : position.bottom_left, 2, 16, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1, frame_color = color.gray, frame_width = 1)
 
 if barstate.islast and not na(p0) and not na(p1)
     for l in lns
@@ -138,19 +371,33 @@ if barstate.islast and not na(p0) and not na(p1)
     lns.clear()
     lbs.clear()
 
-    // price levels
-    array<float> levels = array.new<float>()
-    for d = 0 to maxDeg by stepDeg
-        float lv = levelAt(p0, p1, d)
-        if not na(lv)
-            levels.push(lv)
-            if showPrice
+    // Gann levels
+    if showPrice
+        for d = 0 to maxDeg by stepDeg
+            float lv = levelAt(p0, p1, d)
+            if not na(lv)
                 color c   = colorFor(d)
                 bool  cyc = d > 0 and d % 360 == 0
                 lns.push(line.new(bar_index - 1, lv, bar_index, lv, extend = extLeft ? extend.both : extend.right, color = c, style = cyc ? line.style_solid : line.style_dotted, width = cyc ? 2 : 1))
                 lbs.push(label.new(bar_index + 3, lv, (cyc ? "CYCLE " : "") + str.tostring(d) + "° = " + str.tostring(lv, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
 
-    // time lines + the next upcoming time point
+    // Fibonacci levels
+    if showFib
+        for r in FIB_R
+            float fv = p1 + (p0 - p1) * r
+            lns.push(line.new(t1, fv, time, fv, xloc = xloc.bar_time, extend = extend.right, color = color.new(cFib, 30), style = line.style_dashed))
+            lbs.push(label.new(bar_index + 25, fv, fibName(r) + " = " + str.tostring(fv, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny))
+
+    // Liquidity pools
+    if showLiq
+        for v in bsl
+            lns.push(line.new(bar_index - 30, v, bar_index, v, extend = extend.right, color = cBsl, style = line.style_dashed))
+            lbs.push(label.new(bar_index + 45, v, "BSL " + str.tostring(v, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBsl, size = size.tiny))
+        for v in ssl
+            lns.push(line.new(bar_index - 30, v, bar_index, v, extend = extend.right, color = cSsl, style = line.style_dashed))
+            lbs.push(label.new(bar_index + 45, v, "SSL " + str.tostring(v, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSsl, size = size.tiny))
+
+    // Time lines + next upcoming time point
     int tNext = na
     int dNext = na
     float cycMs = timeMode == TM_ANCHOR ? float(t1 - t0) : timeMode == TM_DAY ? 360.0 * 86400000.0 : fixedDays * 86400000.0
@@ -165,79 +412,94 @@ if barstate.islast and not na(p0) and not na(p1)
                 lns.push(line.new(t, yLbl, t, yLbl * 1.001, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed))
                 lbs.push(label.new(t, yLbl, "T " + str.tostring(d) + "°\n" + fmtT(t), xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small))
 
-    // anchor markers
-    lbs.push(label.new(t0, p0, "0°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_down : label.style_label_up, color = color.orange, textcolor = color.black, size = size.small))
-    lbs.push(label.new(t1, p1, "360°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_up : label.style_label_down, color = color.orange, textcolor = color.black, size = size.small))
+    // Anchor markers
+    lbs.push(label.new(t0, p0, "0°", xloc = xloc.bar_time, style = cycleDown ? label.style_label_down : label.style_label_up, color = color.orange, textcolor = color.black, size = size.small))
+    lbs.push(label.new(t1, p1, "360°", xloc = xloc.bar_time, style = cycleDown ? label.style_label_up : label.style_label_down, color = color.orange, textcolor = color.black, size = size.small))
 
-    // ── scenario logic ──
-    float a1 = nextAbove(levels, close)
-    float a2 = na(a1) ? na : nextAbove(levels, a1)
-    float b1 = nextBelow(levels, close)
-    float b2 = na(b1) ? na : nextBelow(levels, b1)
-    float curDeg = degAt(p0, p1, close)
-    bool  cycleDown = p1 < p0
-
-    bool bull = close > ema and rsi > 50
-    bool bear = close < ema and rsi < 50
-    string bias = bull ? "صاعد ▲" : bear ? "هابط ▼" : "محايد ◆"
-
-    string scen = ""
-    float  tgt1 = na
-    float  tgt2 = na
-    string inval = ""
-    if bull
-        tgt1 := a1
-        tgt2 := a2
-        scen := cycleDown ? "ارتداد تصحيحي من قاع الدورة نحو المستوى الأعلى" : "استمرار الصعود مع اتجاه الدورة"
-        inval := "إغلاق تحت " + fmtLvl(b1)
-    else if bear
-        tgt1 := b1
-        tgt2 := b2
-        scen := cycleDown ? "استمرار الهبوط مع اتجاه الدورة" : "تصحيح هابط من قمة الدورة نحو المستوى الأدنى"
-        inval := "إغلاق فوق " + fmtLvl(a1)
-    else
-        scen := "تذبذب بين " + fmtP(b1) + " و " + fmtP(a1) + " — انتظر إغلاقاً خارج النطاق"
-        inval := "كسر أي من الحدين يحدد الاتجاه"
+    // ── Targets & invalidation from the combined level set ──
+    float tg1 = na
+    float tg2 = na
+    float inv = na
+    if biasDir > 0
+        int k1 = idxAbove(cP, close + tol)
+        tg1 := k1 >= 0 ? cP.get(k1) : na
+        int k2 = na(tg1) ? -1 : idxAbove(cP, tg1 + tol)
+        tg2 := k2 >= 0 ? cP.get(k2) : na
+        int k3 = idxBelow(cP, close - tol)
+        inv := k3 >= 0 ? cP.get(k3) : na
+    else if biasDir < 0
+        int k1 = idxBelow(cP, close - tol)
+        tg1 := k1 >= 0 ? cP.get(k1) : na
+        int k2 = na(tg1) ? -1 : idxBelow(cP, tg1 - tol)
+        tg2 := k2 >= 0 ? cP.get(k2) : na
+        int k3 = idxAbove(cP, close + tol)
+        inv := k3 >= 0 ? cP.get(k3) : na
+    [tg1Name, tg1N] = nameAt(cP, cN, tg1, tol)
+    [tg2Name, tg2N] = nameAt(cP, cN, tg2, tol)
+    [invName, invN] = nameAt(cP, cN, inv, tol)
 
     string timeTxt = na(tNext) ? "—" : "T " + str.tostring(dNext) + "°: " + fmtT(tNext)
+    string scen = ""
+    if biasDir > 0
+        scen := "الأفضلية للصعود نحو " + fmtP(tg1) + (na(tg2) ? "" : " ثم " + fmtP(tg2)) + (na(tNext) ? "" : "\nحتى الموعد الزمني " + fmtT(tNext)) + "\nبشرط الثبات فوق " + fmtP(inv)
+    else if biasDir < 0
+        scen := "الأفضلية للهبوط نحو " + fmtP(tg1) + (na(tg2) ? "" : " ثم " + fmtP(tg2)) + (na(tNext) ? "" : "\nحتى الموعد الزمني " + fmtT(tNext)) + "\nبشرط البقاء تحت " + fmtP(inv)
+    else
+        scen := "تذبذب بين " + fmtP(sup) + " و " + fmtP(res) + "\nانتظر إغلاقاً خارج النطاق" + (na(tNext) ? "" : "\nالموعد الزمني القادم " + fmtT(tNext))
 
-    // projected path arrow (like the hand-drawn yellow arrow)
-    if showArrow and not na(tgt1)
+    // Projected path arrow
+    if showArrow and not na(tg1)
         int tEnd = na(tNext) ? time_close + 20 * (time_close - time) : tNext
-        lns.push(line.new(time, close, tEnd, tgt1, xloc = xloc.bar_time, color = cArrow, width = 2, style = line.style_arrow_right))
+        lns.push(line.new(time, close, tEnd, tg1, xloc = xloc.bar_time, color = cArrow, width = 2, style = line.style_arrow_right))
+        lbs.push(label.new(tEnd, tg1, "الهدف " + fmtP(tg1), xloc = xloc.bar_time, style = biasDir > 0 ? label.style_label_down : label.style_label_up, color = color.new(cArrow, 20), textcolor = color.black, size = size.small))
 
     if showPanel
-        panel.clear(0, 0, 1, 11)
-        color hc = color.new(color.orange, 20)
+        string ts = panelSize == "Tiny" ? size.tiny : panelSize == "Normal" ? size.normal : size.small
         color tc = color.white
-        panel.cell(0, 0, "التحليل الرقمي والزمني", text_color = color.black, bgcolor = hc, text_size = size.small)
-        panel.cell(1, 0, syminfo.ticker + " · " + timeframe.period, text_color = color.black, bgcolor = hc, text_size = size.small)
-        panel.cell(0, 1, "بداية الدورة 0°", text_color = tc, text_size = size.small)
-        panel.cell(1, 1, fmtP(p0) + "  (" + fmtT(t0) + ")", text_color = tc, text_size = size.small)
-        panel.cell(0, 2, "نهاية الدورة 360°", text_color = tc, text_size = size.small)
-        panel.cell(1, 2, fmtP(p1) + "  (" + fmtT(t1) + ")", text_color = tc, text_size = size.small)
-        panel.cell(0, 3, "اتجاه الدورة", text_color = tc, text_size = size.small)
-        panel.cell(1, 3, cycleDown ? "هابطة" : "صاعدة", text_color = cycleDown ? color.red : color.lime, text_size = size.small)
-        panel.cell(0, 4, "السعر الآن", text_color = tc, text_size = size.small)
-        panel.cell(1, 4, fmtP(close) + "  عند " + str.tostring(math.round(curDeg)) + "°", text_color = tc, text_size = size.small)
-        panel.cell(0, 5, "مقاومة / دعم", text_color = tc, text_size = size.small)
-        panel.cell(1, 5, fmtLvl(a1) + "  /  " + fmtLvl(b1), text_color = tc, text_size = size.small)
-        panel.cell(0, 6, "الزخم", text_color = tc, text_size = size.small)
-        panel.cell(1, 6, bias + "  (RSI " + str.tostring(rsi, "#.0") + ")", text_color = bull ? color.lime : bear ? color.red : color.silver, text_size = size.small)
-        panel.cell(0, 7, "السيناريو المتوقع", text_color = color.yellow, text_size = size.small)
-        panel.cell(1, 7, scen, text_color = color.yellow, text_size = size.small)
-        panel.cell(0, 8, "الهدف الأول", text_color = tc, text_size = size.small)
-        panel.cell(1, 8, fmtLvl(tgt1), text_color = tc, text_size = size.small)
-        panel.cell(0, 9, "الهدف الثاني", text_color = tc, text_size = size.small)
-        panel.cell(1, 9, fmtLvl(tgt2), text_color = tc, text_size = size.small)
-        panel.cell(0, 10, "إلغاء السيناريو", text_color = tc, text_size = size.small)
-        panel.cell(1, 10, inval, text_color = tc, text_size = size.small)
-        panel.cell(0, 11, "الموعد الزمني القادم", text_color = tc, text_size = size.small)
-        panel.cell(1, 11, timeTxt + "  (منطقة انعكاس/تسارع محتملة)", text_color = tc, text_size = size.small)
+        color hc = color.new(color.orange, 20)
+        color bc = biasDir > 0 ? color.new(color.green, 40) : biasDir < 0 ? color.new(color.red, 40) : color.new(color.gray, 40)
+        panel.clear(0, 0, 1, 15)
+        panel.cell(0, 0, "تحليل التلاقي", text_color = color.black, bgcolor = hc, text_size = ts)
+        panel.cell(1, 0, syminfo.ticker + " · " + timeframe.period, text_color = color.black, bgcolor = hc, text_size = ts)
+        panel.cell(0, 1, "الفريمات الأكبر", text_color = tc, text_size = ts)
+        panel.cell(1, 1, tf1 + " " + trendTxt(h1) + "  |  " + tf2 + " " + trendTxt(h2) + "  |  " + tf3 + " " + trendTxt(h3), text_color = tc, text_size = ts)
+        panel.cell(0, 2, "الفريم الحالي", text_color = tc, text_size = ts)
+        panel.cell(1, 2, trendTxt(ctTrend), text_color = trendCol(ctTrend), text_size = ts)
+        panel.cell(0, 3, "RSI", text_color = tc, text_size = ts)
+        panel.cell(1, 3, str.tostring(rsi, "#.0") + (bullDiv ? "  دايفرجنس إيجابي" : "") + (bearDiv ? "  دايفرجنس سلبي" : ""), text_color = rsi > 55 ? color.lime : rsi < 45 ? color.red : color.silver, text_size = ts)
+        panel.cell(0, 4, "فيبوناتشي", text_color = tc, text_size = ts)
+        panel.cell(1, 4, fibTxt, text_color = tc, text_size = ts)
+        panel.cell(0, 5, "السيولة", text_color = tc, text_size = ts)
+        int iB = idxAbove(bsl, close)
+        int iS = idxBelow(ssl, close)
+        string liqTxt = "BSL " + (iB >= 0 ? fmtP(bsl.get(iB)) : "—") + " | SSL " + (iS >= 0 ? fmtP(ssl.get(iS)) : "—")
+        liqTxt += sweepActive ? (sweepDir > 0 ? "\nسحب قيعان حديث ▲" : "\nسحب قمم حديث ▼") : ""
+        liqTxt += hasVol ? "\nحجم نسبي " + str.tostring(rvol, "#.#") + "x · OBV " + (obv > obvMa ? "▲" : "▼") : "\n(لا يوجد حجم تداول لهذا الرمز)"
+        panel.cell(1, 5, liqTxt, text_color = tc, text_size = ts)
+        panel.cell(0, 6, "الدورة الرقمية", text_color = tc, text_size = ts)
+        panel.cell(1, 6, (cycleDown ? "هابطة" : "صاعدة") + " · السعر عند " + str.tostring(math.round(degAt(p0, p1, close))) + "°", text_color = tc, text_size = ts)
+        panel.cell(0, 7, "دعم / مقاومة", text_color = tc, text_size = ts)
+        panel.cell(1, 7, fmtP(sup) + " (" + supName + ")\n" + fmtP(res) + " (" + resName + ")", text_color = tc, text_size = ts)
+        panel.cell(0, 8, "النتيجة", text_color = tc, text_size = ts)
+        panel.cell(1, 8, biasTxt + "  ·  " + str.tostring(score, "#.#") + " / " + str.tostring(maxScore, "#.#") + "  ·  ثقة " + str.tostring(conf, "#") + "%", text_color = color.white, bgcolor = bc, text_size = ts)
+        panel.cell(0, 9, "السيناريو المتوقع", text_color = color.yellow, text_size = ts)
+        panel.cell(1, 9, scen, text_color = color.yellow, text_size = ts)
+        panel.cell(0, 10, "الهدف الأول", text_color = tc, text_size = ts)
+        panel.cell(1, 10, fmtP(tg1) + (tg1N > 0 ? " (" + tg1Name + ")" : ""), text_color = tc, text_size = ts)
+        panel.cell(0, 11, "الهدف الثاني", text_color = tc, text_size = ts)
+        panel.cell(1, 11, fmtP(tg2) + (tg2N > 0 ? " (" + tg2Name + ")" : ""), text_color = tc, text_size = ts)
+        panel.cell(0, 12, "إلغاء السيناريو", text_color = tc, text_size = ts)
+        panel.cell(1, 12, biasDir == 0 ? "—" : (biasDir > 0 ? "إغلاق تحت " : "إغلاق فوق ") + fmtP(inv) + (invN > 0 ? " (" + invName + ")" : ""), text_color = tc, text_size = ts)
+        panel.cell(0, 13, "الموعد الزمني", text_color = tc, text_size = ts)
+        panel.cell(1, 13, timeTxt, text_color = tc, text_size = ts)
+        panel.cell(0, 14, "الأسباب", text_color = tc, text_size = ts)
+        panel.cell(1, 14, reasons == "" ? "لا توجد إشارات قوية" : reasons, text_color = color.silver, text_size = ts, text_halign = text.align_right)
 
-// ───────── Alerts: price crossing any level ─────────
-if barstate.isconfirmed and not na(p0) and not na(p1)
-    for d = 0 to maxDeg by stepDeg
-        float lv = levelAt(p0, p1, d)
-        if not na(lv) and ((close[1] < lv and close >= lv) or (close[1] > lv and close <= lv))
-            alert(syminfo.ticker + " crossed " + str.tostring(d) + "° = " + str.tostring(lv, format.mintick), alert.freq_once_per_bar_close)
+// ═════════ Alerts ═════════
+var int prevBias = 0
+if barstate.isconfirmed
+    if biasDir != prevBias
+        alert(syminfo.ticker + " " + timeframe.period + ": السيناريو تغير إلى " + biasTxt + " (score " + str.tostring(score, "#.#") + ")", alert.freq_once_per_bar_close)
+        prevBias := biasDir
+    if sweepBar == bar_index
+        alert(syminfo.ticker + ": " + (sweepDir > 0 ? "سحب سيولة قيعان عند " : "سحب سيولة قمم عند ") + fmtP(sweepLvl), alert.freq_once_per_bar_close)
