@@ -1,0 +1,453 @@
+// Gann + Fib + Liquidity + RSI + MTF Scenario (mobile-safe: no indentation)
+// التحليل الرقمي والزمني + فيبوناتشي + السيولة + RSI + الفريمات الأكبر
+//@version=6
+indicator("Gann + Fib + Liquidity + RSI + MTF Scenario", "GannMobile", overlay = true, max_lines_count = 50, max_labels_count = 100, max_bars_back = 5000)
+
+// ===== Inputs =====
+const string G1 = "Anchors / نقاط الارتكاز"
+anchorMode = input.string("Auto", "Anchor mode / طريقة الارتكاز", options = ["Auto", "Manual"], group = G1)
+lookback = input.int(300, "Auto: lookback bars / عدد الشموع", minval = 10, maxval = 5000, group = G1)
+mStart = input.price(0.0, "Manual: 0° price", group = G1)
+mStartT = input.time(timestamp("2026-01-01T00:00+00:00"), "Manual: 0° time", group = G1)
+mEnd = input.price(0.0, "Manual: 360° price", group = G1)
+mEndT = input.time(timestamp("2026-01-02T00:00+00:00"), "Manual: 360° time", group = G1)
+const string G2 = "Gann / الرقمي"
+const string PM_RANGE = "Range: 0° → 360° between anchors"
+const string PM_SQ9 = "Square of 9 from 0° anchor"
+showPrice = input.bool(true, "Show Gann levels", group = G2)
+priceMode = input.string(PM_RANGE, "Method / الطريقة", options = [PM_RANGE, PM_SQ9], group = G2)
+stepDeg = input.int(36, "Degree step / خطوة الدرجات", options = [15, 30, 36, 45, 60, 90], group = G2)
+const string G3 = "Time cycle / الدورة الزمنية"
+const string TM_ANCHOR = "Anchor-to-anchor duration = 360°"
+const string TM_DAY = "1° = 1 calendar day"
+const string TM_FIXED = "Fixed cycle (days) = 360°"
+showTime = input.bool(true, "Show time lines", group = G3)
+timeMode = input.string(TM_ANCHOR, "Method / الطريقة", options = [TM_ANCHOR, TM_DAY, TM_FIXED], group = G3)
+fixedDays = input.float(30.0, "Fixed cycle length (days)", minval = 0.1, group = G3)
+timeStep = input.int(90, "Time degree step", options = [30, 36, 45, 60, 90, 120, 180, 360], group = G3)
+tz = input.string("Asia/Riyadh", "Timezone / المنطقة الزمنية", group = G3)
+const string G4 = "Fib / Liquidity / RSI"
+showFib = input.bool(true, "Show Fibonacci", group = G4)
+showLiq = input.bool(true, "Show liquidity (BSL / SSL)", group = G4)
+pivLen = input.int(5, "Swing pivot length", minval = 2, maxval = 50, group = G4)
+sweepLook = input.int(10, "Sweep valid for (bars)", minval = 1, group = G4)
+rvolLen = input.int(20, "Relative volume length", minval = 5, group = G4)
+rsiLen = input.int(14, "RSI length", minval = 2, group = G4)
+divLook = input.int(30, "Divergence valid for (bars)", minval = 5, group = G4)
+const string G5 = "Higher timeframes / الفريمات الأكبر"
+tfMode = input.string("Auto", "Higher TFs", options = ["Auto", "Manual"], group = G5)
+mTf1 = input.timeframe("60", "Manual HTF 1", group = G5)
+mTf2 = input.timeframe("240", "Manual HTF 2", group = G5)
+mTf3 = input.timeframe("D", "Manual HTF 3", group = G5)
+const string G6 = "Scenario / السيناريو"
+showArrow = input.bool(true, "Show projected arrow", group = G6)
+tolMult = input.float(0.35, "Confluence tolerance (x ATR)", minval = 0.05, step = 0.05, group = G6)
+panelPos = input.string("Top right", "Panel position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G6)
+c360 = input.color(color.red, "Gann 360°", group = G6)
+c90 = input.color(color.blue, "Gann 90°", group = G6)
+cMinor = input.color(color.gray, "Gann other", group = G6)
+cFib = input.color(color.purple, "Fibonacci", group = G6)
+cBsl = input.color(color.red, "BSL", group = G6)
+cSsl = input.color(color.green, "SSL", group = G6)
+cTime = input.color(color.white, "Time lines", group = G6)
+cArrow = input.color(color.yellow, "Arrow", group = G6)
+
+// ===== Core =====
+float atr = ta.atr(14)
+float tol = atr * tolMult
+float emaF = ta.ema(close, 20)
+float emaS = ta.ema(close, 50)
+float rsi = ta.rsi(close, rsiLen)
+bool hasVol = ta.cum(nz(volume)) > 0
+float rvol = hasVol ? volume / ta.sma(volume, rvolLen) : na
+float obv = ta.obv
+float obvMa = ta.ema(obv, 20)
+
+// ===== Higher timeframes =====
+int secs = timeframe.in_seconds()
+string aTf1 = secs <= 300 ? "15" : secs <= 900 ? "60" : secs <= 3600 ? "240" : secs <= 14400 ? "D" : secs <= 86400 ? "W" : "M"
+string aTf2 = secs <= 300 ? "60" : secs <= 900 ? "240" : secs <= 3600 ? "D" : secs <= 14400 ? "W" : "M"
+string aTf3 = secs <= 300 ? "240" : secs <= 900 ? "D" : secs <= 3600 ? "W" : "M"
+string tf1 = tfMode == "Auto" ? aTf1 : mTf1
+string tf2 = tfMode == "Auto" ? aTf2 : mTf2
+string tf3 = tfMode == "Auto" ? aTf3 : mTf3
+htfTrend(string tf) => request.security(syminfo.tickerid, tf, close > ta.ema(close, 50) and ta.ema(close, 20) > ta.ema(close, 50) ? 1 : close < ta.ema(close, 50) and ta.ema(close, 20) < ta.ema(close, 50) ? -1 : 0)
+int h1 = nz(htfTrend(tf1))
+int h2 = nz(htfTrend(tf2))
+int h3 = nz(htfTrend(tf3))
+int ctTrend = close > emaS and emaF > emaS ? 1 : close < emaS and emaF < emaS ? -1 : 0
+
+// ===== Anchors (0° = older extreme, 360° = newer extreme) =====
+int hiOff = nz(-ta.highestbars(high, lookback))
+int loOff = nz(-ta.lowestbars(low, lookback))
+bool useManual = anchorMode == "Manual" and mStart > 0 and mEnd > 0
+bool autoDown = hiOff > loOff
+bool ready = useManual or bar_index >= lookback
+float p0 = useManual ? mStart : ready ? (autoDown ? high[hiOff] : low[loOff]) : na
+float p1 = useManual ? mEnd : ready ? (autoDown ? low[loOff] : high[hiOff]) : na
+int t0 = useManual ? mStartT : ready ? (autoDown ? time[hiOff] : time[loOff]) : na
+int t1 = useManual ? mEndT : ready ? (autoDown ? time[loOff] : time[hiOff]) : na
+bool cycleDown = p1 < p0
+
+// ===== Gann levels =====
+lvl(int d) => na(p0) or na(p1) ? na : priceMode == PM_RANGE ? math.pow(math.max(0.0, math.sqrt(p0) + (math.sqrt(p1) - math.sqrt(p0)) * d / 360.0), 2) : math.pow(math.max(0.0, math.sqrt(p0) + (p1 < p0 ? -1.0 : 1.0) * d / 180.0), 2)
+degAt(float x) => priceMode == PM_RANGE ? (math.sqrt(x) - math.sqrt(p0)) / (math.sqrt(p1) - math.sqrt(p0)) * 360.0 : (math.sqrt(x) - math.sqrt(p0)) * 180.0 * (p1 < p0 ? -1.0 : 1.0)
+gCol(int k) => k * stepDeg > 0 and (k * stepDeg) % 360 == 0 ? c360 : (k * stepDeg) % 90 == 0 ? c90 : cMinor
+gName(int k) => "جان " + str.tostring(k * stepDeg) + "°"
+float g0 = lvl(0 * stepDeg)
+float g1 = lvl(1 * stepDeg)
+float g2 = lvl(2 * stepDeg)
+float g3 = lvl(3 * stepDeg)
+float g4 = lvl(4 * stepDeg)
+float g5 = lvl(5 * stepDeg)
+float g6 = lvl(6 * stepDeg)
+float g7 = lvl(7 * stepDeg)
+float g8 = lvl(8 * stepDeg)
+float g9 = lvl(9 * stepDeg)
+float g10 = lvl(10 * stepDeg)
+float g11 = lvl(11 * stepDeg)
+float g12 = lvl(12 * stepDeg)
+float g13 = lvl(13 * stepDeg)
+float g14 = lvl(14 * stepDeg)
+float g15 = lvl(15 * stepDeg)
+
+// ===== Fibonacci on the same swing (0 = 360° end, 1 = 0° start) =====
+fib(float r) => p1 + (p0 - p1) * r
+float f1 = fib(0.236)
+float f2 = fib(0.382)
+float f3 = fib(0.5)
+float f4 = fib(0.618)
+float f5 = fib(0.786)
+float fe1 = fib(-0.272)
+float fe2 = fib(-0.618)
+
+// ===== Liquidity: last 2 unswept swing highs (BSL) and lows (SSL) + sweeps =====
+float ph = ta.pivothigh(high, pivLen, pivLen)
+float pl = ta.pivotlow(low, pivLen, pivLen)
+var float bsl1 = na
+var float bsl2 = na
+var float ssl1 = na
+var float ssl2 = na
+bsl2 := not na(ph) ? bsl1 : bsl2
+bsl1 := not na(ph) ? ph : bsl1
+ssl2 := not na(pl) ? ssl1 : ssl2
+ssl1 := not na(pl) ? pl : ssl1
+bool brkB1 = not na(bsl1) and high > bsl1
+bool brkB2 = not na(bsl2) and high > bsl2
+bool brkS1 = not na(ssl1) and low < ssl1
+bool brkS2 = not na(ssl2) and low < ssl2
+float bearLvl = brkB1 and close < bsl1 ? bsl1 : brkB2 and close < bsl2 ? bsl2 : na
+float bullLvl = brkS1 and close > ssl1 ? ssl1 : brkS2 and close > ssl2 ? ssl2 : na
+bool bearSweep = not na(bearLvl)
+bool bullSweep = not na(bullLvl)
+bsl1 := brkB1 ? na : bsl1
+bsl2 := brkB2 ? na : bsl2
+ssl1 := brkS1 ? na : ssl1
+ssl2 := brkS2 ? na : ssl2
+var int sweepBar = na
+var int sweepDir = 0
+var float sweepLvl = na
+sweepDir := bullSweep ? 1 : bearSweep ? -1 : sweepDir
+sweepLvl := bullSweep ? bullLvl : bearSweep ? bearLvl : sweepLvl
+sweepBar := bullSweep or bearSweep ? bar_index : sweepBar
+bool sweepActive = not na(sweepBar) and bar_index - sweepBar <= sweepLook
+
+// ===== RSI divergence =====
+float rPiv = rsi[pivLen]
+var float prevPlP = na
+var float prevPlR = na
+var float prevPhP = na
+var float prevPhR = na
+var int bullDivBar = na
+var int bearDivBar = na
+bullDivBar := not na(pl) and not na(prevPlP) and pl < prevPlP and rPiv > prevPlR ? bar_index : bullDivBar
+bearDivBar := not na(ph) and not na(prevPhP) and ph > prevPhP and rPiv < prevPhR ? bar_index : bearDivBar
+prevPlR := not na(pl) ? rPiv : prevPlR
+prevPlP := not na(pl) ? pl : prevPlP
+prevPhR := not na(ph) ? rPiv : prevPhR
+prevPhP := not na(ph) ? ph : prevPhP
+bool bullDiv = not na(bullDivBar) and bar_index - bullDivBar <= divLook
+bool bearDiv = not na(bearDivBar) and bar_index - bearDivBar <= divLook
+
+// ===== Nearest levels from all sources (no loops) =====
+ab(float v, float x) => v > x ? v : 1e12
+be(float v, float x) => v < x ? v : -1e12
+nu(float x) => math.min(ab(g0, x), ab(g1, x), ab(g2, x), ab(g3, x), ab(g4, x), ab(g5, x), ab(g6, x), ab(g7, x), ab(g8, x), ab(g9, x), ab(g10, x), ab(g11, x), ab(g12, x), ab(g13, x), ab(g14, x), ab(g15, x), ab(f1, x), ab(f2, x), ab(f3, x), ab(f4, x), ab(f5, x), ab(fe1, x), ab(fe2, x), ab(bsl1, x), ab(bsl2, x), ab(ssl1, x), ab(ssl2, x))
+nd(float x) => math.max(be(g0, x), be(g1, x), be(g2, x), be(g3, x), be(g4, x), be(g5, x), be(g6, x), be(g7, x), be(g8, x), be(g9, x), be(g10, x), be(g11, x), be(g12, x), be(g13, x), be(g14, x), be(g15, x), be(f1, x), be(f2, x), be(f3, x), be(f4, x), be(f5, x), be(fe1, x), be(fe2, x), be(bsl1, x), be(bsl2, x), be(ssl1, x), be(ssl2, x))
+nextUp(float x) => na(x) or nu(x) >= 1e11 ? na : nu(x)
+nextDn(float x) => na(x) or nd(x) <= -1e11 ? na : nd(x)
+hit(float v, float x) => not na(v) and not na(x) and math.abs(v - x) <= tol
+nm1(float v, float x, string n) => hit(v, x) ? n + " | " : ""
+cn1(float v, float x) => hit(v, x) ? 1 : 0
+namesAt(float x) => nm1(g0, x, gName(0)) + nm1(g1, x, gName(1)) + nm1(g2, x, gName(2)) + nm1(g3, x, gName(3)) + nm1(g4, x, gName(4)) + nm1(g5, x, gName(5)) + nm1(g6, x, gName(6)) + nm1(g7, x, gName(7)) + nm1(g8, x, gName(8)) + nm1(g9, x, gName(9)) + nm1(g10, x, gName(10)) + nm1(g11, x, gName(11)) + nm1(g12, x, gName(12)) + nm1(g13, x, gName(13)) + nm1(g14, x, gName(14)) + nm1(g15, x, gName(15)) + nm1(f1, x, "فيبو 0.236") + nm1(f2, x, "فيبو 0.382") + nm1(f3, x, "فيبو 0.5") + nm1(f4, x, "فيبو 0.618") + nm1(f5, x, "فيبو 0.786") + nm1(fe1, x, "فيبو امتداد 1.272") + nm1(fe2, x, "فيبو امتداد 1.618") + nm1(bsl1, x, "سيولة BSL") + nm1(bsl2, x, "سيولة BSL") + nm1(ssl1, x, "سيولة SSL") + nm1(ssl2, x, "سيولة SSL")
+countAt(float x) => cn1(g0, x) + cn1(g1, x) + cn1(g2, x) + cn1(g3, x) + cn1(g4, x) + cn1(g5, x) + cn1(g6, x) + cn1(g7, x) + cn1(g8, x) + cn1(g9, x) + cn1(g10, x) + cn1(g11, x) + cn1(g12, x) + cn1(g13, x) + cn1(g14, x) + cn1(g15, x) + cn1(f1, x) + cn1(f2, x) + cn1(f3, x) + cn1(f4, x) + cn1(f5, x) + cn1(fe1, x) + cn1(fe2, x) + cn1(bsl1, x) + cn1(bsl2, x) + cn1(ssl1, x) + cn1(ssl2, x)
+fmtP(float x) => na(x) ? "—" : str.tostring(x, format.mintick)
+fmtT(int t) => na(t) ? "—" : str.format_time(t, "EEE dd MMM yy HH:mm", tz)
+fmtL(float x) => na(x) ? "—" : fmtP(x) + (countAt(x) > 0 ? "  (" + namesAt(x) + ")" : "")
+trendTxt(int t) => t > 0 ? "▲ صاعد" : t < 0 ? "▼ هابط" : "◆ محايد"
+trendCol(int t) => t > 0 ? color.lime : t < 0 ? color.red : color.silver
+
+// ===== Scoring: every component votes =====
+float rsiSig = (rsi > 55 ? 1.0 : rsi < 45 ? -1.0 : 0.0) + (rsi > 70 ? -0.5 : rsi < 30 ? 0.5 : 0.0) + (bullDiv ? 1.0 : 0.0) + (bearDiv ? -1.0 : 0.0)
+float fibPos = p0 != p1 ? (close - p1) / (p0 - p1) : na
+bool inGolden = fibPos >= 0.5 and fibPos <= 0.618
+bool deepRet = fibPos > 0.786
+float fibSig = inGolden ? (cycleDown ? -1.0 : 1.0) : deepRet ? (cycleDown ? 1.0 : -1.0) : 0.0
+string fibTxt = na(fibPos) ? "—" : (fibPos < 0 ? "امتداد بعد نهاية الدورة" : fibPos < 0.382 ? "ارتداد ضعيف" : fibPos < 0.5 ? "ارتداد متوسط" : fibPos <= 0.618 ? "المنطقة الذهبية 0.5–0.618" : fibPos <= 0.786 ? "ارتداد عميق" : fibPos <= 1 ? "قرب بداية الدورة" : "تجاوز بداية الدورة") + " (" + str.tostring(fibPos, "#.###") + ")"
+float sup = nextDn(close)
+float res = nextUp(close)
+bool atSup = not na(sup) and low <= sup + tol and close > sup
+bool atRes = not na(res) and high >= res - tol and close < res
+float lvlSig = atSup ? (countAt(sup) > 1 ? 1.5 : 1.0) : atRes ? (countAt(res) > 1 ? -1.5 : -1.0) : 0.0
+float liqSig = sweepActive ? sweepDir * 1.5 : 0.0
+float volSig = hasVol ? (obv > obvMa ? 0.5 : -0.5) + (rvol > 1.5 ? (close > open ? 0.5 : -0.5) : 0.0) : 0.0
+float score = h1 * 1.0 + h2 * 1.0 + h3 * 1.5 + ctTrend * 1.0 + rsiSig + fibSig + lvlSig + liqSig + volSig
+float maxScore = 3.5 + 1.0 + 2.0 + 1.0 + 1.5 + 1.5 + (hasVol ? 1.0 : 0.0)
+int biasDir = score >= 1.0 ? 1 : score <= -1.0 ? -1 : 0
+float conf = math.min(100.0, math.abs(score) / maxScore * 100.0)
+string biasTxt = score >= 3.0 ? "صاعد قوي ▲▲" : score >= 1.0 ? "صاعد ▲" : score <= -3.0 ? "هابط قوي ▼▼" : score <= -1.0 ? "هابط ▼" : "محايد ◆"
+int htfUp = (h1 > 0 ? 1 : 0) + (h2 > 0 ? 1 : 0) + (h3 > 0 ? 1 : 0)
+int htfDn = (h1 < 0 ? 1 : 0) + (h2 < 0 ? 1 : 0) + (h3 < 0 ? 1 : 0)
+string reasons = "• الفريمات الأكبر: " + str.tostring(htfUp) + " صاعد / " + str.tostring(htfDn) + " هابط\n" + (bullDiv ? "• دايفرجنس إيجابي على RSI\n" : "") + (bearDiv ? "• دايفرجنس سلبي على RSI\n" : "") + (rsi > 70 ? "• RSI تشبع شراء\n" : "") + (rsi < 30 ? "• RSI تشبع بيع\n" : "") + (inGolden ? "• السعر في المنطقة الذهبية لفيبوناتشي\n" : "") + (deepRet ? "• ارتداد أعمق من 0.786 → ضعف اتجاه الدورة\n" : "") + (atSup ? "• ارتداد من دعم " + fmtL(sup) + "\n" : "") + (atRes ? "• رفض من مقاومة " + fmtL(res) + "\n" : "") + (sweepActive ? (sweepDir > 0 ? "• سحب سيولة القيعان عند " : "• سحب سيولة القمم عند ") + fmtP(sweepLvl) + "\n" : "") + (hasVol and rvol > 1.5 ? "• حجم تداول مرتفع " + str.tostring(rvol, "#.#") + "x\n" : "")
+
+// ===== Targets, invalidation, time =====
+float tg1 = biasDir > 0 ? nextUp(close + tol) : biasDir < 0 ? nextDn(close - tol) : na
+float tg2 = na(tg1) ? na : biasDir > 0 ? nextUp(tg1 + tol) : nextDn(tg1 - tol)
+float inv = biasDir > 0 ? nextDn(close - tol) : biasDir < 0 ? nextUp(close + tol) : na
+float cycMs = timeMode == TM_ANCHOR ? float(t1 - t0) : timeMode == TM_DAY ? 360.0 * 86400000.0 : fixedDays * 86400000.0
+float stepMs = cycMs * timeStep / 360.0
+int kNext = na(t0) or na(stepMs) or stepMs <= 0 ? na : int(math.floor((time_close - t0) / stepMs)) + 1
+tk(int k) => na(k) ? na : t0 + int(stepMs * k)
+int tNext = tk(kNext)
+string timeTxt = na(tNext) ? "—" : "T " + str.tostring(kNext * timeStep) + "°: " + fmtT(tNext)
+string scen = biasDir > 0 ? "الأفضلية للصعود نحو " + fmtP(tg1) + (na(tg2) ? "" : " ثم " + fmtP(tg2)) + "\nحتى الموعد الزمني " + fmtT(tNext) + "\nبشرط الثبات فوق " + fmtP(inv) : biasDir < 0 ? "الأفضلية للهبوط نحو " + fmtP(tg1) + (na(tg2) ? "" : " ثم " + fmtP(tg2)) + "\nحتى الموعد الزمني " + fmtT(tNext) + "\nبشرط البقاء تحت " + fmtP(inv) : "تذبذب بين " + fmtP(sup) + " و " + fmtP(res) + "\nانتظر إغلاقاً خارج النطاق\nالموعد الزمني القادم " + fmtT(tNext)
+
+// ===== Plots: levels as horizontal lines =====
+plot(showPrice ? g0 : na, "Gann 0", color = gCol(0), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g1 : na, "Gann 1", color = gCol(1), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g2 : na, "Gann 2", color = gCol(2), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g3 : na, "Gann 3", color = gCol(3), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g4 : na, "Gann 4", color = gCol(4), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g5 : na, "Gann 5", color = gCol(5), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g6 : na, "Gann 6", color = gCol(6), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g7 : na, "Gann 7", color = gCol(7), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g8 : na, "Gann 8", color = gCol(8), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g9 : na, "Gann 9", color = gCol(9), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g10 : na, "Gann 10", color = gCol(10), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g11 : na, "Gann 11", color = gCol(11), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g12 : na, "Gann 12", color = gCol(12), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g13 : na, "Gann 13", color = gCol(13), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g14 : na, "Gann 14", color = gCol(14), trackprice = true, show_last = 1, editable = false)
+plot(showPrice ? g15 : na, "Gann 15", color = gCol(15), trackprice = true, show_last = 1, editable = false)
+plot(showFib ? f1 : na, "Fib 0.236", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? f2 : na, "Fib 0.382", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? f3 : na, "Fib 0.5", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? f4 : na, "Fib 0.618", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? f5 : na, "Fib 0.786", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? fe1 : na, "Fib -0.272", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showFib ? fe2 : na, "Fib -0.618", color = cFib, trackprice = true, show_last = 1, editable = false)
+plot(showLiq ? bsl1 : na, "BSL1", color = cBsl, trackprice = true, show_last = 1, editable = false)
+plot(showLiq ? bsl2 : na, "BSL2", color = cBsl, trackprice = true, show_last = 1, editable = false)
+plot(showLiq ? ssl1 : na, "SSL1", color = cSsl, trackprice = true, show_last = 1, editable = false)
+plot(showLiq ? ssl2 : na, "SSL2", color = cSsl, trackprice = true, show_last = 1, editable = false)
+
+// ===== Labels =====
+var label lg0 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg0, bar_index + 3, showPrice ? g0 : na)
+label.set_text(lg0, ((0 * stepDeg) > 0 and (0 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(0 * stepDeg) + "° = " + fmtP(g0))
+label.set_textcolor(lg0, gCol(0))
+var label lg1 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg1, bar_index + 3, showPrice ? g1 : na)
+label.set_text(lg1, ((1 * stepDeg) > 0 and (1 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(1 * stepDeg) + "° = " + fmtP(g1))
+label.set_textcolor(lg1, gCol(1))
+var label lg2 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg2, bar_index + 3, showPrice ? g2 : na)
+label.set_text(lg2, ((2 * stepDeg) > 0 and (2 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(2 * stepDeg) + "° = " + fmtP(g2))
+label.set_textcolor(lg2, gCol(2))
+var label lg3 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg3, bar_index + 3, showPrice ? g3 : na)
+label.set_text(lg3, ((3 * stepDeg) > 0 and (3 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(3 * stepDeg) + "° = " + fmtP(g3))
+label.set_textcolor(lg3, gCol(3))
+var label lg4 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg4, bar_index + 3, showPrice ? g4 : na)
+label.set_text(lg4, ((4 * stepDeg) > 0 and (4 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(4 * stepDeg) + "° = " + fmtP(g4))
+label.set_textcolor(lg4, gCol(4))
+var label lg5 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg5, bar_index + 3, showPrice ? g5 : na)
+label.set_text(lg5, ((5 * stepDeg) > 0 and (5 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(5 * stepDeg) + "° = " + fmtP(g5))
+label.set_textcolor(lg5, gCol(5))
+var label lg6 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg6, bar_index + 3, showPrice ? g6 : na)
+label.set_text(lg6, ((6 * stepDeg) > 0 and (6 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(6 * stepDeg) + "° = " + fmtP(g6))
+label.set_textcolor(lg6, gCol(6))
+var label lg7 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg7, bar_index + 3, showPrice ? g7 : na)
+label.set_text(lg7, ((7 * stepDeg) > 0 and (7 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(7 * stepDeg) + "° = " + fmtP(g7))
+label.set_textcolor(lg7, gCol(7))
+var label lg8 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg8, bar_index + 3, showPrice ? g8 : na)
+label.set_text(lg8, ((8 * stepDeg) > 0 and (8 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(8 * stepDeg) + "° = " + fmtP(g8))
+label.set_textcolor(lg8, gCol(8))
+var label lg9 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg9, bar_index + 3, showPrice ? g9 : na)
+label.set_text(lg9, ((9 * stepDeg) > 0 and (9 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(9 * stepDeg) + "° = " + fmtP(g9))
+label.set_textcolor(lg9, gCol(9))
+var label lg10 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg10, bar_index + 3, showPrice ? g10 : na)
+label.set_text(lg10, ((10 * stepDeg) > 0 and (10 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(10 * stepDeg) + "° = " + fmtP(g10))
+label.set_textcolor(lg10, gCol(10))
+var label lg11 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg11, bar_index + 3, showPrice ? g11 : na)
+label.set_text(lg11, ((11 * stepDeg) > 0 and (11 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(11 * stepDeg) + "° = " + fmtP(g11))
+label.set_textcolor(lg11, gCol(11))
+var label lg12 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg12, bar_index + 3, showPrice ? g12 : na)
+label.set_text(lg12, ((12 * stepDeg) > 0 and (12 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(12 * stepDeg) + "° = " + fmtP(g12))
+label.set_textcolor(lg12, gCol(12))
+var label lg13 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg13, bar_index + 3, showPrice ? g13 : na)
+label.set_text(lg13, ((13 * stepDeg) > 0 and (13 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(13 * stepDeg) + "° = " + fmtP(g13))
+label.set_textcolor(lg13, gCol(13))
+var label lg14 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg14, bar_index + 3, showPrice ? g14 : na)
+label.set_text(lg14, ((14 * stepDeg) > 0 and (14 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(14 * stepDeg) + "° = " + fmtP(g14))
+label.set_textcolor(lg14, gCol(14))
+var label lg15 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), size = size.small)
+label.set_xy(lg15, bar_index + 3, showPrice ? g15 : na)
+label.set_text(lg15, ((15 * stepDeg) > 0 and (15 * stepDeg) % 360 == 0 ? "CYCLE " : "") + str.tostring(15 * stepDeg) + "° = " + fmtP(g15))
+label.set_textcolor(lg15, gCol(15))
+var label lf1 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lf1, bar_index + 22, showFib ? f1 : na)
+label.set_text(lf1, "فيبو 0.236 = " + fmtP(f1))
+var label lf2 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lf2, bar_index + 22, showFib ? f2 : na)
+label.set_text(lf2, "فيبو 0.382 = " + fmtP(f2))
+var label lf3 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lf3, bar_index + 22, showFib ? f3 : na)
+label.set_text(lf3, "فيبو 0.5 = " + fmtP(f3))
+var label lf4 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lf4, bar_index + 22, showFib ? f4 : na)
+label.set_text(lf4, "فيبو 0.618 = " + fmtP(f4))
+var label lf5 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lf5, bar_index + 22, showFib ? f5 : na)
+label.set_text(lf5, "فيبو 0.786 = " + fmtP(f5))
+var label lfe1 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lfe1, bar_index + 22, showFib ? fe1 : na)
+label.set_text(lfe1, "فيبو امتداد 1.272 = " + fmtP(fe1))
+var label lfe2 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cFib, size = size.tiny)
+label.set_xy(lfe2, bar_index + 22, showFib ? fe2 : na)
+label.set_text(lfe2, "فيبو امتداد 1.618 = " + fmtP(fe2))
+var label lbsl1 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBsl, size = size.tiny)
+label.set_xy(lbsl1, bar_index + 40, showLiq ? bsl1 : na)
+label.set_text(lbsl1, "BSL " + fmtP(bsl1))
+var label lbsl2 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cBsl, size = size.tiny)
+label.set_xy(lbsl2, bar_index + 40, showLiq ? bsl2 : na)
+label.set_text(lbsl2, "BSL " + fmtP(bsl2))
+var label lssl1 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSsl, size = size.tiny)
+label.set_xy(lssl1, bar_index + 40, showLiq ? ssl1 : na)
+label.set_text(lssl1, "SSL " + fmtP(ssl1))
+var label lssl2 = label.new(bar_index, close, "", style = label.style_label_left, color = color.new(color.black, 100), textcolor = cSsl, size = size.tiny)
+label.set_xy(lssl2, bar_index + 40, showLiq ? ssl2 : na)
+label.set_text(lssl2, "SSL " + fmtP(ssl2))
+var label la0 = label.new(0, 0, "0°", xloc = xloc.bar_time, color = color.orange, textcolor = color.black, size = size.small)
+var label la1 = label.new(0, 0, "360°", xloc = xloc.bar_time, color = color.orange, textcolor = color.black, size = size.small)
+label.set_xy(la0, nz(t0), nz(p0))
+label.set_xy(la1, nz(t1), nz(p1))
+label.set_style(la0, cycleDown ? label.style_label_down : label.style_label_up)
+label.set_style(la1, cycleDown ? label.style_label_up : label.style_label_down)
+
+// ===== Time cycle lines (previous + next 3) =====
+var line tl0 = line.new(0, 0, 0, 1, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed)
+var label tb0 = label.new(0, 0, "", xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small)
+int tt0 = tk(kNext - 1 + 0)
+line.set_xy1(tl0, nz(tt0), nz(math.min(p0, p1)))
+line.set_xy2(tl0, nz(tt0), nz(math.min(p0, p1)) * 1.001)
+line.set_color(tl0, showTime and not na(tt0) ? color.new(cTime, 30) : color.new(cTime, 100))
+label.set_xy(tb0, nz(tt0), nz(math.min(p0, p1)))
+label.set_text(tb0, showTime and not na(tt0) ? "T " + str.tostring((kNext - 1 + 0) * timeStep) + "°\n" + fmtT(tt0) : "")
+label.set_color(tb0, showTime and not na(tt0) ? color.new(cTime, 80) : color.new(cTime, 100))
+var line tl1 = line.new(0, 0, 0, 1, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed)
+var label tb1 = label.new(0, 0, "", xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small)
+int tt1 = tk(kNext - 1 + 1)
+line.set_xy1(tl1, nz(tt1), nz(math.min(p0, p1)))
+line.set_xy2(tl1, nz(tt1), nz(math.min(p0, p1)) * 1.001)
+line.set_color(tl1, showTime and not na(tt1) ? color.new(cTime, 30) : color.new(cTime, 100))
+label.set_xy(tb1, nz(tt1), nz(math.min(p0, p1)))
+label.set_text(tb1, showTime and not na(tt1) ? "T " + str.tostring((kNext - 1 + 1) * timeStep) + "°\n" + fmtT(tt1) : "")
+label.set_color(tb1, showTime and not na(tt1) ? color.new(cTime, 80) : color.new(cTime, 100))
+var line tl2 = line.new(0, 0, 0, 1, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed)
+var label tb2 = label.new(0, 0, "", xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small)
+int tt2 = tk(kNext - 1 + 2)
+line.set_xy1(tl2, nz(tt2), nz(math.min(p0, p1)))
+line.set_xy2(tl2, nz(tt2), nz(math.min(p0, p1)) * 1.001)
+line.set_color(tl2, showTime and not na(tt2) ? color.new(cTime, 30) : color.new(cTime, 100))
+label.set_xy(tb2, nz(tt2), nz(math.min(p0, p1)))
+label.set_text(tb2, showTime and not na(tt2) ? "T " + str.tostring((kNext - 1 + 2) * timeStep) + "°\n" + fmtT(tt2) : "")
+label.set_color(tb2, showTime and not na(tt2) ? color.new(cTime, 80) : color.new(cTime, 100))
+var line tl3 = line.new(0, 0, 0, 1, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed)
+var label tb3 = label.new(0, 0, "", xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small)
+int tt3 = tk(kNext - 1 + 3)
+line.set_xy1(tl3, nz(tt3), nz(math.min(p0, p1)))
+line.set_xy2(tl3, nz(tt3), nz(math.min(p0, p1)) * 1.001)
+line.set_color(tl3, showTime and not na(tt3) ? color.new(cTime, 30) : color.new(cTime, 100))
+label.set_xy(tb3, nz(tt3), nz(math.min(p0, p1)))
+label.set_text(tb3, showTime and not na(tt3) ? "T " + str.tostring((kNext - 1 + 3) * timeStep) + "°\n" + fmtT(tt3) : "")
+label.set_color(tb3, showTime and not na(tt3) ? color.new(cTime, 80) : color.new(cTime, 100))
+
+// ===== Projected path arrow =====
+var line arw = line.new(0, 0, 0, 0, xloc = xloc.bar_time, color = cArrow, width = 2, style = line.style_arrow_right)
+var label arl = label.new(0, 0, "", xloc = xloc.bar_time, color = cArrow, textcolor = color.black, size = size.small)
+int tEnd = na(tNext) ? time_close + 20 * (time_close - time) : tNext
+bool arrOn = showArrow and not na(tg1)
+line.set_xy1(arw, time, close)
+line.set_xy2(arw, tEnd, nz(tg1, close))
+line.set_color(arw, arrOn ? cArrow : color.new(cArrow, 100))
+label.set_xy(arl, tEnd, nz(tg1, close))
+label.set_text(arl, arrOn ? "الهدف " + fmtP(tg1) : "")
+label.set_color(arl, arrOn ? cArrow : color.new(cArrow, 100))
+label.set_style(arl, biasDir > 0 ? label.style_label_down : label.style_label_up)
+
+// ===== Scenario panel =====
+var table panel = table.new(panelPos == "Top right" ? position.top_right : panelPos == "Top left" ? position.top_left : panelPos == "Bottom right" ? position.bottom_right : position.bottom_left, 2, 15, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1, frame_color = color.gray, frame_width = 1)
+color hc = color.new(color.orange, 20)
+color bc = biasDir > 0 ? color.new(color.green, 40) : biasDir < 0 ? color.new(color.red, 40) : color.new(color.gray, 40)
+float nb0 = math.min(ab(bsl1, close), ab(bsl2, close))
+float ns0 = math.max(be(ssl1, close), be(ssl2, close))
+float nearBsl = nb0 >= 1e11 ? na : nb0
+float nearSsl = ns0 <= -1e11 ? na : ns0
+string liqTxt = "BSL " + fmtP(nearBsl) + " | SSL " + fmtP(nearSsl) + (sweepActive ? (sweepDir > 0 ? "\nسحب قيعان حديث ▲" : "\nسحب قمم حديث ▼") : "") + (hasVol ? "\nحجم نسبي " + str.tostring(rvol, "#.#") + "x · OBV " + (obv > obvMa ? "▲" : "▼") : "\n(لا يوجد حجم تداول لهذا الرمز)")
+table.cell(panel, 0, 0, "تحليل التلاقي", text_color = color.black, bgcolor = hc, text_size = size.small)
+table.cell(panel, 1, 0, syminfo.ticker + " · " + timeframe.period, text_color = color.black, bgcolor = hc, text_size = size.small)
+table.cell(panel, 0, 1, "الفريمات الأكبر", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 1, tf1 + " " + trendTxt(h1) + "  |  " + tf2 + " " + trendTxt(h2) + "  |  " + tf3 + " " + trendTxt(h3), text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 2, "الفريم الحالي", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 2, trendTxt(ctTrend), text_color = trendCol(ctTrend), bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 3, "RSI", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 3, str.tostring(rsi, "#.0") + (bullDiv ? "  دايفرجنس إيجابي" : "") + (bearDiv ? "  دايفرجنس سلبي" : ""), text_color = rsi > 55 ? color.lime : rsi < 45 ? color.red : color.silver, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 4, "فيبوناتشي", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 4, fibTxt, text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 5, "السيولة", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 5, liqTxt, text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 6, "الدورة الرقمية", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 6, (cycleDown ? "هابطة" : "صاعدة") + " · السعر عند " + str.tostring(math.round(degAt(close))) + "°", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 7, "دعم / مقاومة", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 7, fmtL(sup) + "\n" + fmtL(res), text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 8, "النتيجة", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 8, biasTxt + "  ·  " + str.tostring(score, "#.#") + " / " + str.tostring(maxScore, "#.#") + "  ·  ثقة " + str.tostring(conf, "#") + "%", text_color = color.white, bgcolor = bc, text_size = size.small)
+table.cell(panel, 0, 9, "السيناريو المتوقع", text_color = color.yellow, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 9, scen, text_color = color.yellow, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 10, "الهدف الأول", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 10, fmtL(tg1), text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 11, "الهدف الثاني", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 11, fmtL(tg2), text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 12, "إلغاء السيناريو", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 12, biasDir == 0 ? "—" : (biasDir > 0 ? "إغلاق تحت " : "إغلاق فوق ") + fmtL(inv), text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 13, "الموعد الزمني", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 13, timeTxt, text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 0, 14, "الأسباب", text_color = color.white, bgcolor = na, text_size = size.small)
+table.cell(panel, 1, 14, reasons, text_color = color.silver, bgcolor = na, text_size = size.small)
+
+// ===== Alerts =====
+alertcondition(biasDir != biasDir[1], "Scenario changed / تغير السيناريو", "{{ticker}}: Gann scenario changed")
+alertcondition(bullSweep, "Sell-side liquidity swept / سحب سيولة القيعان", "{{ticker}}: sell-side liquidity swept")
+alertcondition(bearSweep, "Buy-side liquidity swept / سحب سيولة القمم", "{{ticker}}: buy-side liquidity swept")
