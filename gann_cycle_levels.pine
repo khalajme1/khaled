@@ -1,0 +1,120 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// Gann-style price & time cycle levels (Digital & Time analysis)
+// مستويات الدورة السعرية والزمنية (التحليل الرقمي والزمني)
+//
+// Price method "Range": 0° = start pivot, 360° = end pivot, levels are
+// interpolated on the square root of price:
+//     level(d) = ( sqrt(P0) + (sqrt(P360) - sqrt(P0)) * d / 360 )^2
+// Price method "Square of 9": level(d) = ( sqrt(P0) ± d / 180 )^2
+//@version=6
+indicator("Gann Cycle Levels (Price & Time)", "GannCycle", overlay = true, max_lines_count = 400, max_labels_count = 400, max_bars_back = 5000)
+
+// ───────── Inputs ─────────
+const string G1 = "Anchors / نقاط الارتكاز"
+anchorMode = input.string("Auto", "Anchor mode / طريقة الارتكاز", options = ["Auto", "Manual"], group = G1)
+lookback   = input.int(300, "Auto: lookback bars / عدد الشموع", minval = 10, maxval = 5000, group = G1)
+mStart     = input.price(4696.83, "Manual: 0° price / سعر البداية", group = G1)
+mStartT    = input.time(timestamp("2026-10-20T00:00+00:00"), "Manual: 0° time / وقت البداية", group = G1)
+mEnd       = input.price(3869.93, "Manual: 360° price / سعر نهاية الدورة", group = G1)
+mEndT      = input.time(timestamp("2026-11-03T00:00+00:00"), "Manual: 360° time / وقت نهاية الدورة", group = G1)
+
+const string G2 = "Price levels / المستويات السعرية"
+const string PM_RANGE = "Range: 0° → 360° between anchors"
+const string PM_SQ9   = "Square of 9 from 0° anchor"
+showPrice = input.bool(true, "Show price levels", group = G2)
+priceMode = input.string(PM_RANGE, "Method / الطريقة", options = [PM_RANGE, PM_SQ9], group = G2)
+stepDeg   = input.int(36, "Degree step / خطوة الدرجات", options = [15, 30, 36, 45, 60, 90, 120, 180], group = G2)
+maxDeg    = input.int(540, "Max degrees / أقصى درجة", minval = 90, maxval = 1440, group = G2)
+extLeft   = input.bool(true, "Extend lines left", group = G2)
+
+const string G3 = "Time cycle / الدورة الزمنية"
+const string TM_ANCHOR = "Anchor-to-anchor duration = 360°"
+const string TM_DAY    = "1° = 1 calendar day"
+const string TM_FIXED  = "Fixed cycle (days) = 360°"
+showTime  = input.bool(true, "Show time lines", group = G3)
+timeMode  = input.string(TM_ANCHOR, "Method / الطريقة", options = [TM_ANCHOR, TM_DAY, TM_FIXED], group = G3)
+fixedDays = input.float(30.0, "Fixed cycle length (days)", minval = 0.1, group = G3)
+timeStep  = input.int(90, "Time degree step", options = [30, 36, 45, 60, 90, 120, 180, 360], group = G3)
+timeMax   = input.int(720, "Max time degrees", minval = 90, maxval = 1440, group = G3)
+tz        = input.string("Asia/Riyadh", "Label timezone", group = G3)
+
+const string G4 = "Style"
+c360   = input.color(color.red, "360° / cycle", group = G4)
+c90    = input.color(color.blue, "90° multiples", group = G4)
+cMinor = input.color(color.gray, "Other levels", group = G4)
+cTime  = input.color(color.white, "Time lines", group = G4)
+
+// ───────── Helpers ─────────
+levelAt(float p0, float p1, int deg) =>
+    float s0 = math.sqrt(p0)
+    float s  = na
+    if priceMode == PM_RANGE
+        s := s0 + (math.sqrt(p1) - s0) * deg / 360.0
+    else
+        s := s0 + (p1 < p0 ? -1.0 : 1.0) * deg / 180.0
+    s > 0 ? s * s : na
+
+colorFor(int deg) =>
+    deg > 0 and deg % 360 == 0 ? c360 : deg % 90 == 0 ? c90 : cMinor
+
+// ───────── Anchors ─────────
+int hiOff = nz(-ta.highestbars(high, lookback))
+int loOff = nz(-ta.lowestbars(low, lookback))
+
+var float p0 = na
+var float p1 = na
+var int   t0 = na
+var int   t1 = na
+
+if anchorMode == "Manual"
+    p0 := mStart
+    p1 := mEnd
+    t0 := mStartT
+    t1 := mEndT
+else if bar_index >= lookback
+    bool down = hiOff > loOff                 // high is older → falling cycle
+    p0 := down ? high[hiOff] : low[loOff]
+    p1 := down ? low[loOff]  : high[hiOff]
+    t0 := down ? time[hiOff] : time[loOff]
+    t1 := down ? time[loOff] : time[hiOff]
+
+// ───────── Drawing (last bar only) ─────────
+var array<line>  lns = array.new<line>()
+var array<label> lbs = array.new<label>()
+
+if barstate.islast and not na(p0) and not na(p1)
+    for l in lns
+        l.delete()
+    for b in lbs
+        b.delete()
+    lns.clear()
+    lbs.clear()
+
+    if showPrice
+        for d = 0 to maxDeg by stepDeg
+            float lv = levelAt(p0, p1, d)
+            if not na(lv)
+                color c   = colorFor(d)
+                bool  cyc = d > 0 and d % 360 == 0
+                lns.push(line.new(bar_index - 1, lv, bar_index, lv, extend = extLeft ? extend.both : extend.right, color = c, style = cyc ? line.style_solid : line.style_dotted, width = cyc ? 2 : 1))
+                lbs.push(label.new(bar_index + 3, lv, (cyc ? "CYCLE " : "") + str.tostring(d) + "° = " + str.tostring(lv, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
+
+    if showTime and not na(t0)
+        float cycMs = timeMode == TM_ANCHOR ? float(t1 - t0) : timeMode == TM_DAY ? 360.0 * 86400000.0 : fixedDays * 86400000.0
+        if cycMs > 0
+            float yLbl = math.min(p0, p1)
+            for d = timeStep to timeMax by timeStep
+                int t = t0 + int(cycMs * d / 360.0)
+                lns.push(line.new(t, yLbl, t, yLbl * 1.001, xloc = xloc.bar_time, extend = extend.both, color = color.new(cTime, 30), style = line.style_dashed))
+                lbs.push(label.new(t, yLbl, "T " + str.tostring(d) + "°\n" + str.format_time(t, "EEE dd MMM yy HH:mm", tz), xloc = xloc.bar_time, style = label.style_label_up, color = color.new(cTime, 80), textcolor = cTime, size = size.small))
+
+    // anchor markers
+    lbs.push(label.new(t0, p0, "0°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_down : label.style_label_up, color = color.orange, textcolor = color.black, size = size.small))
+    lbs.push(label.new(t1, p1, "360°", xloc = xloc.bar_time, style = p0 > p1 ? label.style_label_up : label.style_label_down, color = color.orange, textcolor = color.black, size = size.small))
+
+// ───────── Alerts: price crossing any level ─────────
+if barstate.isconfirmed and not na(p0) and not na(p1) and showPrice
+    for d = 0 to maxDeg by stepDeg
+        float lv = levelAt(p0, p1, d)
+        if not na(lv) and ((close[1] < lv and close >= lv) or (close[1] > lv and close <= lv))
+            alert(syminfo.ticker + " crossed " + str.tostring(d) + "° = " + str.tostring(lv, format.mintick), alert.freq_once_per_bar_close)
