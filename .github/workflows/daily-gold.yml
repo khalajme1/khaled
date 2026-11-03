@@ -1,0 +1,32 @@
+name: Daily gold signal
+
+on:
+  schedule:
+    # 00:00 UTC = 3:00 الفجر بتوقيت الكويت (UTC+3، بدون توقيت صيفي)
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      manual_price:
+        description: "سعر يدوي (اختياري)"
+        required: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Build and send
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MANUAL_PRICE: ${{ github.event.inputs.manual_price }}
+        run: python -m gold_signals.main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signal
+          path: signal.png
