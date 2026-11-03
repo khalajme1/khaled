@@ -18,13 +18,21 @@ def main() -> None:
     render_png(levels, out, title="الذهب على فريم كبير", date=today)
     print(f"price={price:.2f} up={levels.up} down={levels.down} -> {out}")
 
-    if os.environ.get("TELEGRAM_BOT_TOKEN"):
-        from .telegram import send_photo
+    caption = f"الذهب على فريم كبير — {today}"
+    sent = False
+    if os.environ.get("GREEN_API_TOKEN"):
+        from .whatsapp import send_photo as send_whatsapp
 
-        send_photo(out)
+        send_whatsapp(out, caption)
+        sent = True
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        from .telegram import send_photo as send_telegram
+
+        send_telegram(out, caption)
         print("sent to Telegram")
-    else:
-        print("TELEGRAM_BOT_TOKEN غير موجود — تم حفظ الصورة فقط")
+        sent = True
+    if not sent:
+        print("ما فيه إعدادات إرسال — تم حفظ الصورة فقط")
 
 
 if __name__ == "__main__":
