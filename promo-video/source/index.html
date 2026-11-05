@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face{font-family:Cairo;font-weight:400;src:url(assets/cairo-arabic-400-normal.woff2);unicode-range:U+0600-06FF,U+0750-077F,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:Cairo;font-weight:700;src:url(assets/cairo-arabic-700-normal.woff2);unicode-range:U+0600-06FF,U+0750-077F,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:Cairo;font-weight:900;src:url(assets/cairo-arabic-900-normal.woff2);unicode-range:U+0600-06FF,U+0750-077F,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:Cairo;font-weight:400;src:url(assets/cairo-latin-400-normal.woff2);unicode-range:U+0000-00FF}
+@font-face{font-family:Cairo;font-weight:700;src:url(assets/cairo-latin-700-normal.woff2);unicode-range:U+0000-00FF}
+@font-face{font-family:Cairo;font-weight:900;src:url(assets/cairo-latin-900-normal.woff2);unicode-range:U+0000-00FF}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1920px;overflow:hidden;background:#0b1a4a;font-family:Cairo,sans-serif;color:#fff}
+.stage{position:absolute;inset:0;overflow:hidden}
+.scene{position:absolute;inset:0;opacity:0;overflow:hidden}
+.bg{position:absolute;inset:0;background:radial-gradient(1200px 900px at 50% 35%,#1d3f9e 0%,#0e2366 45%,#07123a 100%)}
+.sweep{position:absolute;top:-20%;width:420px;height:140%;background:linear-gradient(90deg,transparent,rgba(120,200,255,.25),transparent);transform:rotate(18deg)}
+.logo-card{position:absolute;left:50%;top:50%;width:900px;height:430px;border-radius:40px;overflow:hidden;background:#dcdcdc;box-shadow:0 40px 120px rgba(0,0,0,.45)}
+.logo-card img{position:absolute;left:-2px;top:-6px;width:922px}
+.cap{position:absolute;left:0;right:0;text-align:center;padding:0 70px}
+.h1{font-weight:900;font-size:104px;line-height:1.25;text-shadow:0 8px 40px rgba(0,0,0,.45)}
+.h2{font-weight:700;font-size:60px;line-height:1.4;color:#d7ecff;text-shadow:0 6px 30px rgba(0,0,0,.5)}
+.small{font-weight:400;font-size:44px;color:#bfe2ff}
+.photo{position:absolute;inset:0;background-size:cover;background-position:center}
+.shade-b{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,18,58,.85) 0%,rgba(7,18,58,0) 30%,rgba(7,18,58,0) 52%,rgba(7,18,58,.95) 82%)}
+.pill{display:inline-block;padding:14px 40px;margin:10px 8px;border-radius:999px;background:rgba(255,255,255,.14);border:2px solid rgba(255,255,255,.35);font-weight:700;font-size:44px;backdrop-filter:blur(6px)}
+.cta{display:inline-block;padding:28px 90px;border-radius:999px;background:linear-gradient(90deg,#29a8ff,#1c5fe0);font-weight:900;font-size:66px;box-shadow:0 20px 60px rgba(41,168,255,.45)}
+.line{height:6px;width:0;margin:0 auto;border-radius:3px;background:linear-gradient(90deg,#29a8ff,#9fdcff)}
+.bar{position:absolute;bottom:0;left:0;height:12px;background:linear-gradient(90deg,#29a8ff,#1c5fe0)}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- Scene 1: logo reveal -->
+  <div class="scene" id="s1">
+    <div class="bg"></div>
+    <div class="sweep" id="s1sweep"></div>
+    <div class="logo-card" id="s1logo"><img src="assets/logo.jpg"></div>
+    <div class="cap" id="s1t" style="top:1340px">
+      <div class="h2">حلّق معنا نحو العالم</div>
+      <div class="line" id="s1line" style="margin-top:26px"></div>
+    </div>
+  </div>
+
+  <!-- Scene 2: plane -->
+  <div class="scene" id="s2">
+    <div class="photo" style="background-image:url(assets/plane.jpg);filter:blur(30px) brightness(.95);transform:scale(1.3)"></div>
+    <img id="s2img" src="assets/plane.jpg" style="position:absolute;top:500px;height:1000px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 12%,#000 88%,transparent)">
+    <div class="shade-b"></div>
+    <div class="cap" id="s2a" style="top:150px"><div class="h1">نربط الكويت<br>بالعالم</div></div>
+    <div class="cap" id="s2b" style="top:1500px">
+      <span class="pill" id="p1">راحة</span><span class="pill" id="p2">أمان</span><span class="pill" id="p3">ضيافة كويتية</span>
+    </div>
+  </div>
+
+  <!-- Scene 3: customer care -->
+  <div class="scene" id="s3">
+    <div class="photo" id="s3img" style="background-image:url(assets/agent.jpg)"></div>
+    <div class="shade-b"></div>
+    <div class="cap" id="s3a" style="top:140px"><div class="h1">صوتك يهمّنا</div></div>
+    <div class="cap" id="s3b" style="top:1430px">
+      <div class="h2">فريق خدمة العملاء في خدمتك</div>
+      <div class="small" style="margin-top:14px">حجوزات • استفسارات • مساعدة</div>
+    </div>
+  </div>
+
+  <!-- Scene 4: end card -->
+  <div class="scene" id="s4">
+    <div class="bg"></div>
+    <div class="sweep" id="s4sweep"></div>
+    <div class="cap" id="s4a" style="top:330px"><div class="h1">رحلتك القادمة<br>تبدأ من هنا</div></div>
+    <div class="logo-card" id="s4logo" style="width:810px;height:387px"><img src="assets/logo.jpg" style="width:830px;left:-2px;top:-5px"></div>
+    <div class="cap" id="s4b" style="top:1380px"><span class="cta">احجز الآن</span></div>
+    <div class="cap" id="s4c" style="top:1580px"><div class="small" style="direction:ltr">kuwaitairways.com</div></div>
+  </div>
+
+  <div class="bar" id="bar"></div>
+</div>
+
+<script>
+const DUR = 22;
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const p=(t,a,b)=>clamp((t-a)/(b-a));                 // progress 0..1
+const eo=x=>1-Math.pow(1-x,3);                         // ease out cubic
+const eio=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;      // ease in-out
+const back=x=>{const c=1.6;return 1+(c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2)};
+const $=id=>document.getElementById(id);
+// scene opacity with crossfades
+function sceneOp(t,a,b,f=.6){ return Math.min(p(t,a-f/2,a+f/2)||(a<=0?1:0), 1-p(t,b-f/2,b+f/2)); }
+function rise(el,t,a,d=.7,dist=60){const k=eo(p(t,a,a+d));el.style.opacity=k;el.style.transform=`translateY(${(1-k)*dist}px)`;}
+
+window.render = function(t){
+  // ---- Scene 1 (0 - 5)
+  $('s1').style.opacity = t<0.3 ? 1 : sceneOp(t,0,5);
+  let k=back(p(t,.3,1.4));
+  $('s1logo').style.transform=`translate(-50%,-50%) scale(${.6+.4*k}) translateY(${-60*eo(p(t,0,5))}px)`;
+  $('s1logo').style.opacity=eo(p(t,.3,.9));
+  $('s1sweep').style.left=(-500+2200*eio(p(t,1.2,3.4)))+'px';
+  rise($('s1t'),t,1.6);
+  $('s1line').style.width=(420*eo(p(t,2.1,3.2)))+'px';
+
+  // ---- Scene 2 (5 - 11)
+  $('s2').style.opacity=sceneOp(t,5,11);
+  let q=p(t,4.7,11.3);
+  // plane image is landscape; show tall crop and pan right->left to follow the nose
+  // image is 1826px wide at 1000px tall; pan from tail toward nose
+  $('s2img').style.left=(-60-680*eio(q))+'px';
+  $('s2img').style.transform=`scale(${1+.06*q})`;
+  rise($('s2a'),t,5.5);
+  ['p1','p2','p3'].forEach((id,i)=>{const e=$(id);const kk=back(p(t,6.6+i*.35,7.3+i*.35));e.style.opacity=clamp(kk);e.style.transform=`scale(${.5+.5*kk})`});
+
+  // ---- Scene 3 (11 - 16.5)
+  $('s3').style.opacity=sceneOp(t,11,16.5);
+  let r=p(t,10.7,16.8);
+  $('s3img').style.transform=`scale(${1.12+.12*r}) translateY(${20-40*r}px)`;
+  rise($('s3a'),t,11.5);
+  rise($('s3b'),t,12.4);
+
+  // ---- Scene 4 (16.5 - end)
+  $('s4').style.opacity=sceneOp(t,16.5,DUR+5);
+  rise($('s4a'),t,17.0);
+  let l=back(p(t,17.5,18.6));
+  $('s4logo').style.left='50%';$('s4logo').style.top='1030px';
+  $('s4logo').style.opacity=eo(p(t,17.5,18));
+  $('s4logo').style.transform=`translate(-50%,-50%) scale(${.6+.4*l})`;
+  $('s4sweep').style.left=(-500+2200*eio(p(t,18.6,20.6)))+'px';
+  let c=back(p(t,18.8,19.7)); $('s4b').style.opacity=clamp(c);
+  $('s4b').style.transform=`scale(${(.6+.4*c)*(1+.03*Math.sin((t-19.7)*5)*(t>19.7))})`;
+  rise($('s4c'),t,19.6);
+
+  // final fade to black
+  document.querySelector('.stage').style.opacity=1-p(t,DUR-.6,DUR);
+  $('bar').style.width=(1080*t/DUR)+'px';
+};
+render(0);
+</script>
+</body>
+</html>
