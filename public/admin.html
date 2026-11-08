@@ -16,7 +16,19 @@
   </header>
 
   <div class="card">
-    <h3 style="margin-top:0">إضافة مشترك</h3>
+    <h3 style="margin-top:0">طلبات التسجيل <span id="pendingCount" class="badge OTHER"></span></h3>
+    <p class="muted" style="margin-top:0">تأكد من رقم الحساب والإيميل إنهم تحت الوكالة في لوحة الشريك قبل الموافقة.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الاسم</th><th>الشركة</th><th>رقم الحساب</th><th>إيميل الشركة</th><th>إيميل الدخول</th><th>الجوال</th><th>التاريخ</th><th>إجراءات</th></tr></thead>
+        <tbody id="pending"></tbody>
+      </table>
+    </div>
+    <p id="noPending" class="muted hidden" style="text-align:center">لا توجد طلبات جديدة.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">إضافة مشترك يدوياً</h3>
     <form id="addForm" class="grid2">
       <div><label>الاسم</label><input id="name"></div>
       <div><label>البريد الإلكتروني</label><input id="email" type="email" required class="ltr"></div>
@@ -35,11 +47,11 @@
   <div class="card">
     <div class="row" style="justify-content:space-between">
       <h3 style="margin:0">المشتركين</h3>
-      <input id="search" placeholder="بحث بالبريد..." style="max-width:240px">
+      <input id="search" placeholder="بحث بالبريد أو رقم الحساب..." style="max-width:240px">
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>الاسم</th><th>البريد</th><th>الحالة</th><th>ينتهي</th><th>إجراءات</th></tr></thead>
+        <thead><tr><th>الاسم</th><th>البريد</th><th>الوساطة</th><th>الحالة</th><th>ينتهي</th><th>إجراءات</th></tr></thead>
         <tbody id="users"></tbody>
       </table>
     </div>
@@ -62,22 +74,49 @@ async function load() {
   users = data.users || [];
   render();
 }
+const brokerNames = { exness: 'Exness', justmarkets: 'JustMarkets', fxpro: 'FxPro' };
+function cell(text, cls) { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text || '—'; return td; }
+function renderPending() {
+  const list = users.filter((u) => u.status === 'pending');
+  $('pendingCount').textContent = list.length || '';
+  $('noPending').classList.toggle('hidden', list.length > 0);
+  const tb = $('pending');
+  tb.innerHTML = '';
+  for (const u of list) {
+    const tr = document.createElement('tr');
+    tr.append(cell(u.name), cell(brokerNames[u.broker] || u.broker), cell(u.broker_account, 'ltr'), cell(u.broker_email, 'ltr'),
+      cell(u.email, 'ltr'), cell(u.phone, 'ltr'), cell(fmtDate(u.created_at)));
+    const td = document.createElement('td');
+    const actions = document.createElement('div'); actions.className = 'row';
+    const sel = document.createElement('select'); sel.style.width = 'auto'; sel.style.padding = '6px';
+    sel.innerHTML = '<option value="1">شهر</option><option value="2">شهرين</option><option value="3">3 شهور</option><option value="6">6 شهور</option><option value="12">سنة</option>';
+    actions.append(sel, btn('موافقة', '', () => approve(u, Number(sel.value))), btn('رفض', 'danger', () => reject(u)));
+    td.appendChild(actions); tr.appendChild(td);
+    tb.appendChild(tr);
+  }
+}
+async function approve(u, months) { await api(`/api/admin/users/${u.id}/approve`, { method: 'POST', body: JSON.stringify({ months }) }); load(); }
+async function reject(u) { if (confirm('رفض طلب ' + u.email + '؟')) { await api(`/api/admin/users/${u.id}/reject`, { method: 'POST' }); load(); } }
+
 function render() {
+  renderPending();
   const q = $('search').value.trim().toLowerCase();
   const tb = $('users');
   tb.innerHTML = '';
-  users.filter((u) => !q || u.email.includes(q) || (u.name || '').toLowerCase().includes(q)).forEach((u) => {
+  users.filter((u) => u.status !== 'pending').filter((u) => !q || (u.broker_account || '').includes(q) || u.email.includes(q) || (u.name || '').toLowerCase().includes(q)).forEach((u) => {
     const tr = document.createElement('tr');
     const daysLeft = u.expires_at ? Math.ceil((u.expires_at - Date.now()) / 86400000) : null;
     tr.innerHTML = `
-      <td class="n"></td><td class="e ltr"></td>
-      <td>${u.is_admin ? '<span class="badge OTHER">مدير</span>' : u.active ? `<span class="badge BUY">فعّال · ${daysLeft} يوم</span>` : '<span class="badge SELL">منتهي</span>'}</td>
+      <td class="n"></td><td class="e ltr"></td><td class="b ltr"></td>
+      <td>${u.is_admin ? '<span class="badge OTHER">مدير</span>' : u.status === 'rejected' ? '<span class="badge SELL">مرفوض</span>' : u.active ? `<span class="badge BUY">فعّال · ${daysLeft} يوم</span>` : '<span class="badge SELL">منتهي</span>'}</td>
       <td>${u.is_admin ? '—' : fmtDate(u.expires_at)}</td>
       <td class="row"></td>`;
     tr.querySelector('.n').textContent = u.name || '';
     tr.querySelector('.e').textContent = u.email;
+    tr.querySelector('.b').textContent = u.broker ? `${brokerNames[u.broker] || u.broker} · ${u.broker_account}` : '—';
     const actions = tr.querySelector('.row');
     if (!u.is_admin) {
+      if (u.status === 'rejected') actions.append(btn('موافقة', '', () => approve(u, 1)));
       actions.append(
         btn('+ شهر', '', () => extend(u.id, 1)),
         btn('+ 3 شهور', 'ghost', () => extend(u.id, 3)),

@@ -18,6 +18,13 @@ const SESSION_DAYS = 30;
 const SINGLE_DEVICE = process.env.SINGLE_DEVICE !== 'false'; // one active login per user
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
 
+// Partner (affiliate) brokers: a new member must open an account through one of these links.
+const BROKERS = [
+  { id: 'exness', name: 'Exness', url: 'https://one.exnessonelink.com/a/7w3b6fma5a' },
+  { id: 'justmarkets', name: 'JustMarkets', url: 'https://one.justmarkets.link/a/tpvqxa0odj' },
+  { id: 'fxpro', name: 'FxPro', url: 'https://direct.fxpro.group/ar/partner/8bGa6fgc' },
+];
+
 if (!WEBHOOK_SECRET || WEBHOOK_SECRET.length < 12) {
   console.error('WEBHOOK_SECRET must be set (at least 12 characters).');
   process.exit(1);
@@ -58,6 +65,17 @@ db.exec(`
   );
 `);
 
+// Migrations for the registration/approval flow.
+{
+  const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  const add = (name, def) => { if (!cols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${def}`); };
+  add('status', "TEXT NOT NULL DEFAULT 'approved'"); // pending | approved | rejected
+  add('broker', 'TEXT');
+  add('broker_account', 'TEXT');
+  add('broker_email', 'TEXT');
+  add('phone', 'TEXT');
+}
+
 // ---------- Helpers ----------
 const now = () => Date.now();
 const DAY = 24 * 60 * 60 * 1000;
@@ -96,8 +114,13 @@ function publicUser(u) {
     email: u.email,
     name: u.name,
     is_admin: !!u.is_admin,
+    status: u.status,
+    broker: u.broker,
+    broker_account: u.broker_account,
+    broker_email: u.broker_email,
+    phone: u.phone,
     expires_at: u.expires_at,
-    active: !!u.is_admin || (u.expires_at != null && u.expires_at > now()),
+    active: !!u.is_admin || (u.status === 'approved' && u.expires_at != null && u.expires_at > now()),
     created_at: u.created_at,
   };
 }
@@ -167,6 +190,37 @@ function rateLimited(ip) {
   return rec.count > 20;
 }
 
+// ---------- Registration ----------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+app.get('/api/brokers', (_req, res) => res.json({ brokers: BROKERS }));
+
+app.post('/api/register', (req, res) => {
+  if (rateLimited(req.ip)) return res.status(429).json({ error: 'too_many_attempts' });
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 80);
+  const phone = String(b.phone || '').trim().slice(0, 30) || null;
+  const email = String(b.email || '').trim().toLowerCase();
+  const password = String(b.password || '');
+  const broker = String(b.broker || '');
+  const brokerAccount = String(b.broker_account || '').trim();
+  const brokerEmail = String(b.broker_email || '').trim().toLowerCase();
+
+  if (!name) return res.status(400).json({ error: 'name_required' });
+  if (!BROKERS.some((x) => x.id === broker)) return res.status(400).json({ error: 'invalid_broker' });
+  if (!/^[A-Za-z0-9-]{4,30}$/.test(brokerAccount)) return res.status(400).json({ error: 'invalid_broker_account' });
+  if (!EMAIL_RE.test(brokerEmail)) return res.status(400).json({ error: 'invalid_broker_email' });
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'invalid_email' });
+  if (password.length < 6) return res.status(400).json({ error: 'password_too_short' });
+  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return res.status(409).json({ error: 'email_exists' });
+  if (db.prepare('SELECT 1 FROM users WHERE broker = ? AND broker_account = ?').get(broker, brokerAccount)) {
+    return res.status(409).json({ error: 'broker_account_exists' });
+  }
+  db.prepare(`INSERT INTO users (email, name, phone, pass_hash, is_admin, status, broker, broker_account, broker_email, expires_at, created_at)
+    VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, NULL, ?)`)
+    .run(email, name, phone, hashPassword(password), broker, brokerAccount, brokerEmail, now());
+  res.json({ ok: true, status: 'pending' });
+});
+
 // ---------- Auth ----------
 app.post('/api/login', (req, res) => {
   if (rateLimited(req.ip)) return res.status(429).json({ error: 'too_many_attempts' });
@@ -176,6 +230,8 @@ app.post('/api/login', (req, res) => {
   if (!user || !verifyPassword(password, user.pass_hash)) {
     return res.status(401).json({ error: 'invalid_credentials' });
   }
+  if (!user.is_admin && user.status === 'pending') return res.status(403).json({ error: 'pending' });
+  if (!user.is_admin && user.status === 'rejected') return res.status(403).json({ error: 'rejected' });
   if (SINGLE_DEVICE && !user.is_admin) {
     // Logging in on a new device signs out the previous one (prevents account sharing).
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
@@ -288,13 +344,31 @@ app.post('/api/admin/users', requireAdmin, (req, res) => {
   const password = String(req.body?.password || '');
   const name = String(req.body?.name || '').trim() || null;
   const months = Math.max(0, Math.min(Number(req.body?.months) || 1, 36));
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid_email' });
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'invalid_email' });
   if (password.length < 6) return res.status(400).json({ error: 'password_too_short' });
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return res.status(409).json({ error: 'email_exists' });
   const expires = months > 0 ? addMonths(now(), months) : null;
   const r = db.prepare('INSERT INTO users (email, name, pass_hash, is_admin, expires_at, created_at) VALUES (?, ?, ?, 0, ?, ?)')
     .run(email, name, hashPassword(password), expires, now());
   res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(Number(r.lastInsertRowid))) });
+});
+
+// Approve a pending registration and start the subscription.
+app.post('/api/admin/users/:id/approve', requireAdmin, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
+  if (!user) return res.status(404).json({ error: 'not_found' });
+  const months = Math.max(1, Math.min(Math.trunc(Number(req.body?.months) || 1), 36));
+  const expires = addMonths(Math.max(now(), user.expires_at || 0), months);
+  db.prepare("UPDATE users SET status = 'approved', expires_at = ? WHERE id = ?").run(expires, user.id);
+  res.json({ user: publicUser({ ...user, status: 'approved', expires_at: expires }) });
+});
+
+app.post('/api/admin/users/:id/reject', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare("UPDATE users SET status = 'rejected' WHERE id = ? AND is_admin = 0").run(id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND user_id NOT IN (SELECT id FROM users WHERE is_admin = 1)').run(id);
+  closeStreamsForUser(id);
+  res.json({ ok: true });
 });
 
 // Extend by N months (from the later of now / current expiry). Negative months shortens.
@@ -304,8 +378,8 @@ app.post('/api/admin/users/:id/extend', requireAdmin, (req, res) => {
   const months = Math.trunc(Number(req.body?.months) || 1);
   const base = months > 0 ? Math.max(now(), user.expires_at || 0) : (user.expires_at || now());
   const expires = addMonths(base, months);
-  db.prepare('UPDATE users SET expires_at = ? WHERE id = ?').run(expires, user.id);
-  res.json({ user: publicUser({ ...user, expires_at: expires }) });
+  db.prepare("UPDATE users SET expires_at = ?, status = 'approved' WHERE id = ?").run(expires, user.id);
+  res.json({ user: publicUser({ ...user, status: 'approved', expires_at: expires }) });
 });
 
 app.post('/api/admin/users/:id/deactivate', requireAdmin, (req, res) => {

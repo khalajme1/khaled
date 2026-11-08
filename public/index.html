@@ -22,6 +22,57 @@
         <div style="margin-top:16px"><button type="submit" style="width:100%">دخول</button></div>
         <div id="loginErr" class="err"></div>
       </form>
+      <p class="muted" style="text-align:center">ما عندك حساب؟ <a href="#" onclick="openRegister();return false" class="link">سجّل الآن</a></p>
+    </div>
+  </div>
+
+  <!-- Register -->
+  <div id="registerView" class="wrap hidden">
+    <div class="card login" style="max-width:520px;margin-top:4vh">
+      <div class="brand" style="text-align:center;margin-bottom:4px">تسجيل جديد</div>
+
+      <div class="step">
+        <div class="step-title"><span class="step-num">1</span> افتح حساب تداول عن طريق أحد روابطنا</div>
+        <p class="muted" style="margin:6px 0 10px">لازم يكون حسابك مسجّل من خلال أحد الروابط التالية حتى يتم قبول طلبك.</p>
+        <div id="brokerLinks" class="broker-links"></div>
+      </div>
+
+      <form id="registerForm" class="step">
+        <div class="step-title"><span class="step-num">2</span> بيانات حساب الوساطة</div>
+        <label>الشركة اللي سجلت فيها</label>
+        <select id="rBroker" required><option value="">اختر الشركة</option></select>
+        <label>رقم الحساب في الشركة</label>
+        <input id="rAccount" required inputmode="numeric" class="ltr" placeholder="12345678">
+        <label>الإيميل المسجل في الشركة</label>
+        <input id="rBrokerEmail" type="email" required class="ltr">
+
+        <div class="step-title" style="margin-top:18px"><span class="step-num">3</span> بيانات الدخول للموقع</div>
+        <label>الاسم</label>
+        <input id="rName" required>
+        <label>رقم الجوال (اختياري)</label>
+        <input id="rPhone" type="tel" class="ltr">
+        <label>الإيميل</label>
+        <div class="row" style="flex-wrap:nowrap">
+          <input id="rEmail" type="email" required class="ltr" autocomplete="username">
+        </div>
+        <label class="row muted" style="gap:6px;margin-top:6px"><input type="checkbox" id="sameEmail" style="width:auto"> نفس إيميل الشركة</label>
+        <label>كلمة المرور</label>
+        <input id="rPassword" type="password" required minlength="6" class="ltr" autocomplete="new-password">
+        <label>تأكيد كلمة المرور</label>
+        <input id="rPassword2" type="password" required minlength="6" class="ltr" autocomplete="new-password">
+        <div style="margin-top:16px"><button type="submit" style="width:100%">إرسال الطلب</button></div>
+        <div id="regErr" class="err"></div>
+      </form>
+      <p class="muted" style="text-align:center">عندك حساب؟ <a href="#" onclick="show('loginView');return false" class="link">تسجيل الدخول</a></p>
+    </div>
+  </div>
+
+  <!-- Pending / rejected -->
+  <div id="pendingView" class="wrap hidden">
+    <div class="card login" style="text-align:center">
+      <div class="brand" id="pendingTitle">تم استلام طلبك</div>
+      <p id="pendingText">طلبك قيد المراجعة. بنتحقق من تسجيلك عن طريق رابطنا، وبعد الموافقة تقدر تدخل بالإيميل وكلمة المرور.</p>
+      <button class="ghost" onclick="show('loginView')">رجوع لتسجيل الدخول</button>
     </div>
   </div>
 
@@ -61,7 +112,7 @@ let me = null;
 let es = null;
 
 function show(view) {
-  for (const v of ['loginView', 'expiredView', 'appView']) $(v).classList.toggle('hidden', v !== view);
+  for (const v of ['loginView', 'registerView', 'pendingView', 'expiredView', 'appView']) $(v).classList.toggle('hidden', v !== view);
 }
 const fmtDate = (ms) => ms ? new Date(ms).toLocaleString('ar', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 const fmtNum = (n) => n == null ? null : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 });
@@ -74,7 +125,7 @@ async function api(path, opts = {}) {
 
 async function init() {
   const { status, data } = await api('/api/me');
-  if (status !== 200) return show('loginView');
+  if (status !== 200) return location.hash === '#register' ? openRegister() : show('loginView');
   me = data.user;
   if (!me.active) {
     $('expiredText').textContent = me.expires_at ? 'انتهى في ' + fmtDate(me.expires_at) : 'لا يوجد اشتراك فعّال على هذا الحساب.';
@@ -93,8 +144,59 @@ $('loginForm').addEventListener('submit', async (e) => {
   $('loginErr').textContent = '';
   const { status, data } = await api('/api/login', { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
   if (status === 200) return init();
+  if (data.error === 'pending') return showPending(false);
+  if (data.error === 'rejected') return showPending(true);
   $('loginErr').textContent = status === 429 ? 'محاولات كثيرة، حاول لاحقاً' : 'البريد أو كلمة المرور غير صحيحة';
 });
+
+function showPending(rejected) {
+  $('pendingTitle').textContent = rejected ? 'لم تتم الموافقة على طلبك' : 'طلبك قيد المراجعة';
+  $('pendingText').textContent = rejected
+    ? 'ما قدرنا نتحقق من تسجيلك عن طريق روابطنا. تواصل معنا للمساعدة.'
+    : 'بنتحقق من تسجيلك عن طريق رابطنا، وبعد الموافقة تقدر تدخل بالإيميل وكلمة المرور.';
+  show('pendingView');
+}
+
+// ---------- Register ----------
+let brokersLoaded = false;
+async function openRegister() {
+  show('registerView');
+  if (brokersLoaded) return;
+  const { data } = await api('/api/brokers');
+  for (const b of data.brokers || []) {
+    const a = document.createElement('a');
+    a.href = b.url; a.target = '_blank'; a.rel = 'noopener';
+    a.className = 'broker-btn';
+    a.innerHTML = '<b></b><span>افتح حساب ↗</span>';
+    a.querySelector('b').textContent = b.name;
+    $('brokerLinks').appendChild(a);
+    const o = document.createElement('option'); o.value = b.id; o.textContent = b.name; $('rBroker').appendChild(o);
+  }
+  brokersLoaded = true;
+}
+$('sameEmail').addEventListener('change', (e) => { if (e.target.checked) $('rEmail').value = $('rBrokerEmail').value; });
+$('rBrokerEmail').addEventListener('input', () => { if ($('sameEmail').checked) $('rEmail').value = $('rBrokerEmail').value; });
+
+const regErrors = {
+  name_required: 'اكتب اسمك', invalid_broker: 'اختر الشركة', invalid_broker_account: 'رقم الحساب غير صحيح',
+  invalid_broker_email: 'إيميل الشركة غير صحيح', invalid_email: 'الإيميل غير صحيح', password_too_short: 'كلمة المرور 6 أحرف على الأقل',
+  email_exists: 'الإيميل مسجل مسبقاً', broker_account_exists: 'رقم الحساب هذا مسجل مسبقاً', too_many_attempts: 'محاولات كثيرة، حاول لاحقاً',
+};
+$('registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('regErr').textContent = '';
+  if ($('rPassword').value !== $('rPassword2').value) { $('regErr').textContent = 'كلمتا المرور غير متطابقتين'; return; }
+  const { status, data } = await api('/api/register', { method: 'POST', body: JSON.stringify({
+    broker: $('rBroker').value, broker_account: $('rAccount').value, broker_email: $('rBrokerEmail').value,
+    name: $('rName').value, phone: $('rPhone').value, email: $('rEmail').value, password: $('rPassword').value,
+  }) });
+  if (status !== 200) { $('regErr').textContent = regErrors[data.error] || 'حدث خطأ، حاول مرة ثانية'; return; }
+  e.target.reset();
+  $('pendingTitle').textContent = 'تم استلام طلبك ✅';
+  $('pendingText').textContent = 'طلبك الآن قيد المراجعة. بنتحقق من تسجيلك عن طريق رابطنا، وبعد الموافقة تقدر تدخل بالإيميل وكلمة المرور.';
+  show('pendingView');
+});
+if (location.hash === '#register') openRegister();
 
 async function logout() {
   if (es) es.close();
