@@ -58,3 +58,4 @@ th, td { padding: 8px; border-bottom: 1px solid var(--border); text-align: right
 .broker-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px; border: 1px solid var(--gold); border-radius: 10px; text-decoration: none; color: var(--text); background: rgba(212,175,55,.06); }
 .broker-btn span { font-size: 12px; color: var(--gold); }
 .broker-btn:hover { background: rgba(212,175,55,.15); }
+.tg-opt { gap: 8px; margin-top: 14px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text); font-size: 14px; }

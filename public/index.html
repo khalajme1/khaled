@@ -51,6 +51,12 @@
         <input id="rName" required>
         <label>رقم الجوال (اختياري)</label>
         <input id="rPhone" type="tel" class="ltr">
+
+        <label class="row tg-opt"><input type="checkbox" id="rTelegram" style="width:auto"> أرغب بالانضمام لقنوات التليقرام (اختياري)</label>
+        <div id="tgBox" class="hidden">
+          <label>يوزر التليقرام</label>
+          <input id="rTelegramUser" class="ltr" placeholder="@username">
+        </div>
         <label>الإيميل</label>
         <div class="row" style="flex-wrap:nowrap">
           <input id="rEmail" type="email" required class="ltr" autocomplete="username">
@@ -102,6 +108,10 @@
       <div><span class="muted">ينتهي الاشتراك:</span> <b id="meExpires"></b></div>
       <button class="ghost small" id="notifBtn" onclick="enableNotifications()">تفعيل التنبيهات</button>
     </div>
+    <div id="tgCard" class="card hidden">
+      <b>قنوات التليقرام</b>
+      <div id="tgLinks" class="broker-links" style="margin-top:10px"></div>
+    </div>
     <div id="signals"></div>
     <p id="empty" class="muted hidden" style="text-align:center">لا توجد صفقات بعد.</p>
   </div>
@@ -136,6 +146,7 @@ async function init() {
   $('adminLink').classList.toggle('hidden', !me.is_admin);
   show('appView');
   await loadSignals();
+  loadTelegram();
   connect();
 }
 
@@ -174,13 +185,14 @@ async function openRegister() {
   }
   brokersLoaded = true;
 }
+$('rTelegram').addEventListener('change', (e) => $('tgBox').classList.toggle('hidden', !e.target.checked));
 $('sameEmail').addEventListener('change', (e) => { if (e.target.checked) $('rEmail').value = $('rBrokerEmail').value; });
 $('rBrokerEmail').addEventListener('input', () => { if ($('sameEmail').checked) $('rEmail').value = $('rBrokerEmail').value; });
 
 const regErrors = {
   name_required: 'اكتب اسمك', invalid_broker: 'اختر الشركة', invalid_broker_account: 'رقم الحساب غير صحيح',
   invalid_broker_email: 'إيميل الشركة غير صحيح', invalid_email: 'الإيميل غير صحيح', password_too_short: 'كلمة المرور 6 أحرف على الأقل',
-  email_exists: 'الإيميل مسجل مسبقاً', broker_account_exists: 'رقم الحساب هذا مسجل مسبقاً', too_many_attempts: 'محاولات كثيرة، حاول لاحقاً',
+  email_exists: 'الإيميل مسجل مسبقاً', invalid_telegram: 'يوزر التليقرام غير صحيح', broker_account_exists: 'رقم الحساب هذا مسجل مسبقاً', too_many_attempts: 'محاولات كثيرة، حاول لاحقاً',
 };
 $('registerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -188,7 +200,8 @@ $('registerForm').addEventListener('submit', async (e) => {
   if ($('rPassword').value !== $('rPassword2').value) { $('regErr').textContent = 'كلمتا المرور غير متطابقتين'; return; }
   const { status, data } = await api('/api/register', { method: 'POST', body: JSON.stringify({
     broker: $('rBroker').value, broker_account: $('rAccount').value, broker_email: $('rBrokerEmail').value,
-    name: $('rName').value, phone: $('rPhone').value, email: $('rEmail').value, password: $('rPassword').value,
+    name: $('rName').value, phone: $('rPhone').value,
+    wants_telegram: $('rTelegram').checked, telegram_username: $('rTelegramUser').value, email: $('rEmail').value, password: $('rPassword').value,
   }) });
   if (status !== 200) { $('regErr').textContent = regErrors[data.error] || 'حدث خطأ، حاول مرة ثانية'; return; }
   e.target.reset();
@@ -233,6 +246,20 @@ async function loadSignals() {
   box.innerHTML = '';
   (data.signals || []).forEach((s) => box.appendChild(signalCard(s)));
   $('empty').classList.toggle('hidden', (data.signals || []).length > 0);
+}
+
+async function loadTelegram() {
+  const { data } = await api('/api/telegram');
+  const list = data.channels || [];
+  $('tgCard').classList.toggle('hidden', list.length === 0);
+  $('tgLinks').innerHTML = '';
+  for (const c of list) {
+    const a = document.createElement('a');
+    a.href = c.url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'broker-btn';
+    a.innerHTML = '<b></b><span>انضم ↗</span>';
+    a.querySelector('b').textContent = c.name;
+    $('tgLinks').appendChild(a);
+  }
 }
 
 function setLive(on) {

@@ -25,6 +25,11 @@ const BROKERS = [
   { id: 'fxpro', name: 'FxPro', url: 'https://direct.fxpro.group/ar/partner/8bGa6fgc' },
 ];
 
+// Telegram channels shown to approved members who asked to join. Fill in your invite links.
+const TELEGRAM_CHANNELS = [
+  // { name: 'قناة التوصيات', url: 'https://t.me/+xxxxxxxx' },
+];
+
 if (!WEBHOOK_SECRET || WEBHOOK_SECRET.length < 12) {
   console.error('WEBHOOK_SECRET must be set (at least 12 characters).');
   process.exit(1);
@@ -74,6 +79,8 @@ db.exec(`
   add('broker_account', 'TEXT');
   add('broker_email', 'TEXT');
   add('phone', 'TEXT');
+  add('wants_telegram', 'INTEGER NOT NULL DEFAULT 0');
+  add('telegram_username', 'TEXT');
 }
 
 // ---------- Helpers ----------
@@ -119,6 +126,8 @@ function publicUser(u) {
     broker_account: u.broker_account,
     broker_email: u.broker_email,
     phone: u.phone,
+    wants_telegram: !!u.wants_telegram,
+    telegram_username: u.telegram_username,
     expires_at: u.expires_at,
     active: !!u.is_admin || (u.status === 'approved' && u.expires_at != null && u.expires_at > now()),
     created_at: u.created_at,
@@ -199,6 +208,9 @@ app.post('/api/register', (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 80);
   const phone = String(b.phone || '').trim().slice(0, 30) || null;
+  const wantsTelegram = b.wants_telegram ? 1 : 0;
+  const telegramUsername = wantsTelegram ? String(b.telegram_username || '').trim().replace(/^@/, '').slice(0, 40) || null : null;
+  if (telegramUsername && !/^[A-Za-z0-9_]{4,40}$/.test(telegramUsername)) return res.status(400).json({ error: 'invalid_telegram' });
   const email = String(b.email || '').trim().toLowerCase();
   const password = String(b.password || '');
   const broker = String(b.broker || '');
@@ -215,9 +227,9 @@ app.post('/api/register', (req, res) => {
   if (db.prepare('SELECT 1 FROM users WHERE broker = ? AND broker_account = ?').get(broker, brokerAccount)) {
     return res.status(409).json({ error: 'broker_account_exists' });
   }
-  db.prepare(`INSERT INTO users (email, name, phone, pass_hash, is_admin, status, broker, broker_account, broker_email, expires_at, created_at)
-    VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, NULL, ?)`)
-    .run(email, name, phone, hashPassword(password), broker, brokerAccount, brokerEmail, now());
+  db.prepare(`INSERT INTO users (email, name, phone, pass_hash, is_admin, status, broker, broker_account, broker_email, wants_telegram, telegram_username, expires_at, created_at)
+    VALUES (?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?, ?, NULL, ?)`)
+    .run(email, name, phone, hashPassword(password), broker, brokerAccount, brokerEmail, wantsTelegram, telegramUsername, now());
   res.json({ ok: true, status: 'pending' });
 });
 
@@ -259,6 +271,12 @@ app.post('/api/change-password', requireAuth, (req, res) => {
   if (String(newPass || '').length < 6) return res.status(400).json({ error: 'password_too_short' });
   db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(hashPassword(String(newPass)), req.user.id);
   res.json({ ok: true });
+});
+
+// Telegram links, only for active members who opted in.
+app.get('/api/telegram', requireActive, (req, res) => {
+  const ok = req.user.is_admin || req.user.wants_telegram;
+  res.json({ channels: ok ? TELEGRAM_CHANNELS : [] });
 });
 
 // ---------- Signals ----------
