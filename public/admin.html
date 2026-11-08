@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>لوحة التحكم</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">لوحة التحكم</div>
+    <div class="row">
+      <a href="/"><button class="ghost small">الصفقات</button></a>
+    </div>
+  </header>
+
+  <div class="card">
+    <h3 style="margin-top:0">إضافة مشترك</h3>
+    <form id="addForm" class="grid2">
+      <div><label>الاسم</label><input id="name"></div>
+      <div><label>البريد الإلكتروني</label><input id="email" type="email" required class="ltr"></div>
+      <div><label>كلمة المرور</label><input id="password" required minlength="6" class="ltr"></div>
+      <div><label>مدة الاشتراك</label>
+        <select id="months">
+          <option value="1">شهر</option><option value="2">شهرين</option><option value="3">3 شهور</option>
+          <option value="6">6 شهور</option><option value="12">سنة</option>
+        </select>
+      </div>
+      <div style="align-self:end"><button type="submit" style="width:100%">إضافة</button></div>
+    </form>
+    <div id="addErr" class="err"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">المشتركين</h3>
+      <input id="search" placeholder="بحث بالبريد..." style="max-width:240px">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الاسم</th><th>البريد</th><th>الحالة</th><th>ينتهي</th><th>إجراءات</th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let users = [];
+const fmtDate = (ms) => ms ? new Date(ms).toLocaleDateString('ar', { dateStyle: 'medium' }) : '—';
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) { location.href = '/'; }
+  return { status: res.status, data };
+}
+const errors = { invalid_email: 'بريد غير صحيح', password_too_short: 'كلمة المرور 6 أحرف على الأقل', email_exists: 'البريد مسجل مسبقاً' };
+
+async function load() {
+  const { data } = await api('/api/admin/users');
+  users = data.users || [];
+  render();
+}
+function render() {
+  const q = $('search').value.trim().toLowerCase();
+  const tb = $('users');
+  tb.innerHTML = '';
+  users.filter((u) => !q || u.email.includes(q) || (u.name || '').toLowerCase().includes(q)).forEach((u) => {
+    const tr = document.createElement('tr');
+    const daysLeft = u.expires_at ? Math.ceil((u.expires_at - Date.now()) / 86400000) : null;
+    tr.innerHTML = `
+      <td class="n"></td><td class="e ltr"></td>
+      <td>${u.is_admin ? '<span class="badge OTHER">مدير</span>' : u.active ? `<span class="badge BUY">فعّال · ${daysLeft} يوم</span>` : '<span class="badge SELL">منتهي</span>'}</td>
+      <td>${u.is_admin ? '—' : fmtDate(u.expires_at)}</td>
+      <td class="row"></td>`;
+    tr.querySelector('.n').textContent = u.name || '';
+    tr.querySelector('.e').textContent = u.email;
+    const actions = tr.querySelector('.row');
+    if (!u.is_admin) {
+      actions.append(
+        btn('+ شهر', '', () => extend(u.id, 1)),
+        btn('+ 3 شهور', 'ghost', () => extend(u.id, 3)),
+        btn('كلمة مرور', 'ghost', () => resetPass(u)),
+        btn('إيقاف', 'ghost', () => deactivate(u)),
+        btn('حذف', 'danger', () => del(u)),
+      );
+    }
+    tb.appendChild(tr);
+  });
+}
+function btn(text, cls, fn) { const b = document.createElement('button'); b.className = 'small ' + cls; b.textContent = text; b.onclick = fn; return b; }
+async function extend(id, months) { await api(`/api/admin/users/${id}/extend`, { method: 'POST', body: JSON.stringify({ months }) }); load(); }
+async function deactivate(u) { if (confirm('إيقاف اشتراك ' + u.email + '؟')) { await api(`/api/admin/users/${u.id}/deactivate`, { method: 'POST' }); load(); } }
+async function del(u) { if (confirm('حذف ' + u.email + ' نهائياً؟')) { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); load(); } }
+async function resetPass(u) {
+  const p = prompt('كلمة المرور الجديدة لـ ' + u.email);
+  if (!p) return;
+  const { status, data } = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: JSON.stringify({ password: p }) });
+  alert(status === 200 ? 'تم التغيير' : errors[data.error] || 'خطأ');
+}
+$('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('addErr').textContent = '';
+  const { status, data } = await api('/api/admin/users', { method: 'POST', body: JSON.stringify({
+    name: $('name').value, email: $('email').value, password: $('password').value, months: Number($('months').value),
+  }) });
+  if (status !== 200) { $('addErr').textContent = errors[data.error] || 'خطأ'; return; }
+  e.target.reset();
+  load();
+});
+$('search').addEventListener('input', render);
+load();
+</script>
+</body>
+</html>

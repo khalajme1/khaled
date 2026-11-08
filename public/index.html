@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>توصيات الذهب</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f1115">
+</head>
+<body>
+  <!-- Login -->
+  <div id="loginView" class="wrap hidden">
+    <div class="card login">
+      <div class="brand" style="text-align:center;margin-bottom:8px">توصيات الذهب</div>
+      <p class="muted" style="text-align:center">سجّل دخولك لعرض الصفقات</p>
+      <form id="loginForm">
+        <label>البريد الإلكتروني</label>
+        <input type="email" id="email" required autocomplete="username" class="ltr">
+        <label>كلمة المرور</label>
+        <input type="password" id="password" required autocomplete="current-password" class="ltr">
+        <div style="margin-top:16px"><button type="submit" style="width:100%">دخول</button></div>
+        <div id="loginErr" class="err"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Expired -->
+  <div id="expiredView" class="wrap hidden">
+    <div class="card login" style="text-align:center">
+      <div class="brand">انتهى اشتراكك</div>
+      <p id="expiredText" class="muted"></p>
+      <p>تواصل معنا لتجديد الاشتراك الشهري.</p>
+      <button class="ghost" onclick="logout()">تسجيل خروج</button>
+    </div>
+  </div>
+
+  <!-- Signals -->
+  <div id="appView" class="wrap hidden">
+    <header>
+      <div class="brand">توصيات الذهب</div>
+      <div class="row">
+        <span class="live-dot off" id="liveDot"></span>
+        <span class="muted" id="liveText">غير متصل</span>
+        <a href="/admin" id="adminLink" class="hidden"><button class="ghost small">لوحة التحكم</button></a>
+        <button class="ghost small" onclick="logout()">خروج</button>
+      </div>
+    </header>
+    <div class="card row" style="justify-content:space-between">
+      <div><span class="muted">الحساب:</span> <span id="meEmail" class="ltr"></span></div>
+      <div><span class="muted">ينتهي الاشتراك:</span> <b id="meExpires"></b></div>
+      <button class="ghost small" id="notifBtn" onclick="enableNotifications()">تفعيل التنبيهات</button>
+    </div>
+    <div id="signals"></div>
+    <p id="empty" class="muted hidden" style="text-align:center">لا توجد صفقات بعد.</p>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let me = null;
+let es = null;
+
+function show(view) {
+  for (const v of ['loginView', 'expiredView', 'appView']) $(v).classList.toggle('hidden', v !== view);
+}
+const fmtDate = (ms) => ms ? new Date(ms).toLocaleString('ar', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtNum = (n) => n == null ? null : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 });
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, data };
+}
+
+async function init() {
+  const { status, data } = await api('/api/me');
+  if (status !== 200) return show('loginView');
+  me = data.user;
+  if (!me.active) {
+    $('expiredText').textContent = me.expires_at ? 'انتهى في ' + fmtDate(me.expires_at) : 'لا يوجد اشتراك فعّال على هذا الحساب.';
+    return show('expiredView');
+  }
+  $('meEmail').textContent = me.email;
+  $('meExpires').textContent = me.is_admin ? 'مدير' : fmtDate(me.expires_at);
+  $('adminLink').classList.toggle('hidden', !me.is_admin);
+  show('appView');
+  await loadSignals();
+  connect();
+}
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginErr').textContent = '';
+  const { status, data } = await api('/api/login', { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
+  if (status === 200) return init();
+  $('loginErr').textContent = status === 429 ? 'محاولات كثيرة، حاول لاحقاً' : 'البريد أو كلمة المرور غير صحيحة';
+});
+
+async function logout() {
+  if (es) es.close();
+  await api('/api/logout', { method: 'POST' });
+  show('loginView');
+}
+
+function signalCard(s, isNew) {
+  const div = document.createElement('div');
+  const cls = s.action === 'BUY' || s.action === 'SELL' ? s.action : 'OTHER';
+  const actionText = s.action === 'BUY' ? 'شراء BUY' : s.action === 'SELL' ? 'بيع SELL' : (s.action || 'تنبيه');
+  div.className = 'card signal' + (isNew ? ' new' : '');
+  const lv = [['الدخول', s.price], ['وقف الخسارة', s.sl], ['هدف 1', s.tp1], ['هدف 2', s.tp2], ['هدف 3', s.tp3]]
+    .filter(([, v]) => v != null)
+    .map(([k, v]) => `<div class="lvl"><span>${k}</span><b>${fmtNum(v)}</b></div>`).join('');
+  div.innerHTML = `
+    <div>
+      <div class="row"><span class="badge ${cls}"></span><b class="ltr sym"></b><span class="muted tf"></span></div>
+      ${lv ? `<div class="levels">${lv}</div>` : ''}
+      <p class="note muted" style="margin:10px 0 0"></p>
+    </div>
+    <div class="muted" style="font-size:12px">${fmtDate(s.created_at)}</div>`;
+  div.querySelector('.badge').textContent = actionText;
+  div.querySelector('.sym').textContent = s.symbol || '';
+  div.querySelector('.tf').textContent = s.timeframe ? '· ' + s.timeframe : '';
+  div.querySelector('.note').textContent = s.note || '';
+  return div;
+}
+
+async function loadSignals() {
+  const { status, data } = await api('/api/signals');
+  if (status === 402) return init();
+  const box = $('signals');
+  box.innerHTML = '';
+  (data.signals || []).forEach((s) => box.appendChild(signalCard(s)));
+  $('empty').classList.toggle('hidden', (data.signals || []).length > 0);
+}
+
+function setLive(on) {
+  $('liveDot').classList.toggle('off', !on);
+  $('liveText').textContent = on ? 'مباشر' : 'غير متصل';
+}
+
+function connect() {
+  if (es) es.close();
+  es = new EventSource('/api/stream');
+  es.onopen = () => setLive(true);
+  es.onerror = async () => {
+    setLive(false);
+    // If the session ended (logged in elsewhere / expired), stop and re-check.
+    const { status } = await api('/api/me');
+    if (status !== 200) { es.close(); show('loginView'); }
+    else { const r = await api('/api/signals?limit=1'); if (r.status === 402) { es.close(); init(); } }
+  };
+  es.addEventListener('signal', (ev) => {
+    const s = JSON.parse(ev.data);
+    $('signals').prepend(signalCard(s, true));
+    $('empty').classList.add('hidden');
+    notify(s);
+  });
+}
+
+function enableNotifications() {
+  if (!('Notification' in window)) return alert('المتصفح لا يدعم التنبيهات');
+  Notification.requestPermission().then((p) => { if (p === 'granted') $('notifBtn').textContent = 'التنبيهات مفعّلة'; });
+}
+function notify(s) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.1; o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.25);
+  } catch {}
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(`${s.action || 'تنبيه'} ${s.symbol || ''}`, { body: s.price != null ? 'الدخول: ' + fmtNum(s.price) : (s.note || '') });
+  }
+}
+if ('Notification' in window && Notification.permission === 'granted') $('notifBtn').textContent = 'التنبيهات مفعّلة';
+
+init();
+</script>
+</body>
+</html>

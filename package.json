@@ -1,0 +1,27 @@
+{
+  "name": "gold-signals",
+  "version": "1.0.0",
+  "description": "TradingView gold signals for subscribers",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khalajme1/khaled.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/khalajme1/khaled/issues"
+  },
+  "homepage": "https://github.com/khalajme1/khaled#readme",
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.5"
+  }
+}
