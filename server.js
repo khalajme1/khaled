@@ -425,8 +425,17 @@ setInterval(() => { for (const s of streams) s.res.write(': ping\n\n'); }, 25000
 // Body: JSON (recommended) or plain text.
 app.post('/webhook/:secret', (req, res) => {
   if (!safeEqual(req.params.secret, WEBHOOK_SECRET)) return res.status(404).end();
+  const signal = createSignal(req.body);
+  res.json({ ok: true, id: signal.id });
+});
 
-  let body = req.body;
+// Admin: send a test signal without TradingView.
+app.post('/api/admin/test-signal', requireAdmin, (req, res) => {
+  res.json({ signal: createSignal(req.body || {}) });
+});
+
+function createSignal(input) {
+  let body = input;
   let raw = typeof body === 'string' ? body : JSON.stringify(body);
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch { body = { note: body }; }
@@ -458,8 +467,8 @@ app.post('/webhook/:secret', (req, res) => {
   );
   signal.id = Number(r.lastInsertRowid);
   broadcast('signal', signal);
-  res.json({ ok: true, id: signal.id });
-});
+  return signal;
+}
 
 // ---------- Admin ----------
 app.get('/api/admin/users', requireAdmin, (_req, res) => {
