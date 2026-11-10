@@ -28,6 +28,27 @@
   </div>
 
   <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">📅 تنبيهات الأخبار</h3>
+      <button class="ghost small" onclick="refreshNews()">تحديث من التقويم الاقتصادي</button>
+    </div>
+    <p id="feedStatus" class="muted"></p>
+    <form id="newsForm" class="grid2">
+      <div><label>الخبر (بالعربي)</label><input id="nTitle" required placeholder="مثال: خطاب ترامب"></div>
+      <div><label>الوقت (بتوقيتك)</label><input id="nTime" type="datetime-local" required class="ltr"></div>
+      <div><label>التأثير</label><select id="nImpact"><option value="High">قوي</option><option value="Medium">متوسط</option></select></div>
+      <div style="align-self:end"><button type="submit" style="width:100%">إضافة خبر</button></div>
+    </form>
+    <div id="newsErr" class="err"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الوقت</th><th>الخبر</th><th>التأثير</th><th>المصدر</th><th></th></tr></thead>
+        <tbody id="newsRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
     <h3 style="margin-top:0">إضافة مشترك يدوياً</h3>
     <form id="addForm" class="grid2">
       <div><label>الاسم</label><input id="name"></div>
@@ -85,6 +106,7 @@ function tgCell(u) {
 function renderPending() {
   const list = users.filter((u) => u.status === 'pending');
   $('pendingCount').textContent = list.length || '';
+  $('pendingCount').classList.toggle('hidden', !list.length);
   $('noPending').classList.toggle('hidden', list.length > 0);
   const tb = $('pending');
   tb.innerHTML = '';
@@ -156,7 +178,43 @@ $('addForm').addEventListener('submit', async (e) => {
   load();
 });
 $('search').addEventListener('input', render);
+
+// ---------- News ----------
+const fmtDT = (ms) => new Date(ms).toLocaleString('ar', { weekday: 'short', day: 'numeric', month: 'numeric', hour: 'numeric', minute: '2-digit' });
+async function loadNews() {
+  const { data } = await api('/api/admin/news');
+  const f = data.last_fetch || {};
+  $('feedStatus').textContent = !data.feed ? 'السحب التلقائي متوقف.'
+    : !f.at ? 'جاري سحب الأخبار من التقويم الاقتصادي...'
+    : f.ok ? `آخر تحديث تلقائي: ${fmtDT(f.at)} (${f.count} خبر). الأخبار القوية للدولار تنضاف تلقائياً كل ساعة.`
+    : `فشل آخر تحديث (${f.error}). تقدر تضيف الأخبار يدوياً.`;
+  const tb = $('newsRows');
+  tb.innerHTML = '';
+  for (const n of data.news || []) {
+    const tr = document.createElement('tr');
+    if (n.hidden || n.event_at < Date.now()) tr.style.opacity = '.45';
+    tr.append(cell(fmtDT(n.event_at)), cell(n.title + (n.title_en && n.title_en !== n.title ? ` (${n.title_en})` : '')),
+      cell(n.impact === 'High' ? 'قوي' : 'متوسط'), cell(n.source === 'manual' ? 'يدوي' : 'تلقائي'));
+    const td = document.createElement('td');
+    if (n.hidden) td.append(btn('إظهار', 'ghost', () => hideNews(n, false)));
+    else td.append(btn(n.source === 'manual' ? 'حذف' : 'إخفاء', 'ghost', () => hideNews(n, true)));
+    tr.appendChild(td);
+    tb.appendChild(tr);
+  }
+}
+async function hideNews(n, hidden) { await api(`/api/admin/news/${n.id}/hide`, { method: 'POST', body: JSON.stringify({ hidden }) }); loadNews(); }
+async function refreshNews() { $('feedStatus').textContent = 'جاري التحديث...'; await api('/api/admin/news/refresh', { method: 'POST' }); loadNews(); }
+$('newsForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('newsErr').textContent = '';
+  const t = new Date($('nTime').value).getTime();
+  const { status } = await api('/api/admin/news', { method: 'POST', body: JSON.stringify({ title: $('nTitle').value, event_at: t, impact: $('nImpact').value }) });
+  if (status !== 200) { $('newsErr').textContent = 'تأكد من الخبر والوقت'; return; }
+  e.target.reset();
+  loadNews();
+});
 load();
+loadNews();
 </script>
 </body>
 </html>

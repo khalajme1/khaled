@@ -59,3 +59,16 @@ th, td { padding: 8px; border-bottom: 1px solid var(--border); text-align: right
 .broker-btn span { font-size: 12px; color: var(--gold); }
 .broker-btn:hover { background: rgba(212,175,55,.15); }
 .tg-opt { gap: 8px; margin-top: 14px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text); font-size: 14px; }
+.news-alert { background: rgba(239,68,68,.12); border: 1px solid var(--sell); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; animation: pulse 2s ease-in-out infinite; }
+.news-alert .na-title { font-weight: 700; color: #ff8a8a; font-size: 16px; }
+.news-alert .na-body { margin-top: 6px; font-size: 14px; line-height: 1.7; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.0); } 50% { box-shadow: 0 0 0 4px rgba(239,68,68,.15); } }
+.news-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.news-row.past { opacity: .5; }
+.nr-time { min-width: 72px; text-align: center; }
+.nr-time b { display: block; font-size: 15px; }
+.nr-time span { font-size: 11px; color: var(--muted); }
+.nr-main { flex: 1; }
+.nr-title { font-weight: 600; }
+.nr-meta { font-size: 12px; margin-top: 2px; direction: rtl; }
+.signal-news { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.4); color: #ffb4b4; font-size: 13px; line-height: 1.6; }

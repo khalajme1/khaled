@@ -108,6 +108,14 @@
       <div><span class="muted">ينتهي الاشتراك:</span> <b id="meExpires"></b></div>
       <button class="ghost small" id="notifBtn" onclick="enableNotifications()">تفعيل التنبيهات</button>
     </div>
+    <div id="newsAlert" class="news-alert hidden"></div>
+    <div id="newsCard" class="card hidden">
+      <div class="row" style="justify-content:space-between">
+        <b>📅 أخبار مؤثرة على الذهب</b>
+        <span class="muted" style="font-size:12px">بتوقيتك المحلي</span>
+      </div>
+      <div id="newsList" style="margin-top:8px"></div>
+    </div>
     <div id="tgCard" class="card hidden">
       <b>قنوات التليقرام</b>
       <div id="tgLinks" class="broker-links" style="margin-top:10px"></div>
@@ -125,6 +133,22 @@ function show(view) {
   for (const v of ['loginView', 'registerView', 'pendingView', 'expiredView', 'appView']) $(v).classList.toggle('hidden', v !== view);
 }
 const fmtDate = (ms) => ms ? new Date(ms).toLocaleString('ar', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtTime = (ms) => new Date(ms).toLocaleTimeString('ar', { hour: 'numeric', minute: '2-digit' });
+const fmtDay = (ms) => {
+  const d = new Date(ms), t = new Date();
+  const key = (x) => x.toDateString();
+  if (key(d) === key(t)) return 'اليوم';
+  const tm = new Date(t); tm.setDate(t.getDate() + 1);
+  if (key(d) === key(tm)) return 'بكرة';
+  return d.toLocaleDateString('ar', { weekday: 'long', day: 'numeric', month: 'numeric' });
+};
+function fmtIn(ms) {
+  const m = Math.round((ms - Date.now()) / 60000);
+  if (m <= 0 && m > -1) return 'الآن';
+  const a = Math.abs(m), h = Math.floor(a / 60), mm = a % 60;
+  const txt = h ? `${h} ساعة${mm ? ' و' + mm + ' دقيقة' : ''}` : `${mm} دقيقة`;
+  return m > 0 ? 'بعد ' + txt : 'قبل ' + txt;
+}
 const fmtNum = (n) => n == null ? null : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 });
 
 async function api(path, opts = {}) {
@@ -147,6 +171,7 @@ async function init() {
   show('appView');
   await loadSignals();
   loadTelegram();
+  loadNews();
   connect();
 }
 
@@ -236,6 +261,13 @@ function signalCard(s, isNew) {
   div.querySelector('.sym').textContent = s.symbol || '';
   div.querySelector('.tf').textContent = s.timeframe ? '· ' + s.timeframe : '';
   div.querySelector('.note').textContent = s.note || '';
+  if (s.news && s.news.length) {
+    const w = document.createElement('div');
+    w.className = 'signal-news';
+    w.textContent = '⚠️ انتبه: ' + s.news.map((n) => `${n.title} الساعة ${fmtTime(n.event_at)}`).join('، ') +
+      ' — كن حذر في هذه الصفقة واستخدم وقف الخسارة.';
+    div.firstElementChild.appendChild(w);
+  }
   return div;
 }
 
@@ -278,6 +310,14 @@ function connect() {
     if (status !== 200) { es.close(); show('loginView'); }
     else { const r = await api('/api/signals?limit=1'); if (r.status === 402) { es.close(); init(); } }
   };
+  es.addEventListener('news', (ev) => {
+    const n = JSON.parse(ev.data);
+    loadNews();
+    beep();
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('⚠️ تنبيه أخبار الذهب', { body: `${n.title} الساعة ${fmtTime(n.event_at)} (${fmtIn(n.event_at)}). كن حذر في الصفقات.` });
+    }
+  });
   es.addEventListener('signal', (ev) => {
     const s = JSON.parse(ev.data);
     $('signals').prepend(signalCard(s, true));
@@ -290,13 +330,82 @@ function enableNotifications() {
   if (!('Notification' in window)) return alert('المتصفح لا يدعم التنبيهات');
   Notification.requestPermission().then((p) => { if (p === 'granted') $('notifBtn').textContent = 'التنبيهات مفعّلة'; });
 }
-function notify(s) {
+// ---------- News ----------
+let newsItems = [];
+let newsWin = { before: 60, after: 30 };
+async function loadNews() {
+  const { status, data } = await api('/api/news');
+  if (status !== 200) return;
+  newsItems = data.news || [];
+  newsWin = { before: data.warn_before_min ?? 60, after: data.warn_after_min ?? 30 };
+  renderNews();
+}
+function renderNews() {
+  const t = Date.now();
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const endToday = new Date(startToday); endToday.setDate(endToday.getDate() + 1);
+  const today = newsItems.filter((n) => n.event_at >= startToday && n.event_at < endToday);
+  const next = newsItems.find((n) => n.event_at > t && n.event_at >= endToday);
+  const list = today.length ? today : next ? [next] : [];
+
+  // Caution banner: news within the warning window.
+  const hot = newsItems.filter((n) => n.event_at - t <= newsWin.before * 60000 && t - n.event_at <= newsWin.after * 60000);
+  const alertBox = $('newsAlert');
+  alertBox.classList.toggle('hidden', hot.length === 0);
+  if (hot.length) {
+    const n = hot[0];
+    const upcoming = n.event_at > t;
+    alertBox.innerHTML = '<div class="na-title"></div><div class="na-body"></div>';
+    alertBox.querySelector('.na-title').textContent = upcoming ? `⚠️ انتبه: خبر قوي ${fmtIn(n.event_at)}` : '⚠️ انتبه: صدر خبر قوي — السوق متذبذب';
+    alertBox.querySelector('.na-body').textContent =
+      `${hot.map((x) => `${x.title} الساعة ${fmtTime(x.event_at)}`).join('، ')}. كن حذر في الصفقات، خفف اللوت والتزم بوقف الخسارة.`;
+  }
+
+  $('newsCard').classList.remove('hidden');
+  const box = $('newsList');
+  box.innerHTML = '';
+  if (!today.length) {
+    const p = document.createElement('p');
+    p.className = 'muted'; p.style.margin = '4px 0 8px';
+    p.textContent = '✅ لا توجد أخبار قوية اليوم' + (next ? ' — أقرب خبر:' : '.');
+    box.appendChild(p);
+  } else {
+    const p = document.createElement('p');
+    p.className = 'muted'; p.style.margin = '4px 0 8px';
+    p.textContent = 'انتبه، اليوم فيه أخبار مؤثرة. كن حذر في الصفقات قبلها وبعدها:';
+    box.appendChild(p);
+  }
+  for (const n of list) {
+    const past = n.event_at < t;
+    const row = document.createElement('div');
+    row.className = 'news-row' + (past ? ' past' : '');
+    row.innerHTML = `<div class="nr-time"><b></b><span></span></div><div class="nr-main"><div class="nr-title"></div><div class="nr-meta muted"></div></div><span class="badge"></span>`;
+    row.querySelector('.nr-time b').textContent = fmtTime(n.event_at);
+    row.querySelector('.nr-time span').textContent = today.length ? fmtIn(n.event_at) : fmtDay(n.event_at);
+    row.querySelector('.nr-title').textContent = n.title;
+    const meta = [];
+    if (n.forecast) meta.push('المتوقع: ' + n.forecast);
+    if (n.previous) meta.push('السابق: ' + n.previous);
+    row.querySelector('.nr-meta').textContent = meta.join(' · ');
+    const b = row.querySelector('.badge');
+    b.className = 'badge ' + (n.impact === 'High' ? 'SELL' : 'OTHER');
+    b.textContent = past ? 'صدر' : n.impact === 'High' ? 'قوي' : 'متوسط';
+    box.appendChild(row);
+  }
+}
+setInterval(() => { if (newsItems.length) renderNews(); }, 30000);
+setInterval(() => { if (!$('appView').classList.contains('hidden')) loadNews(); }, 10 * 60000);
+
+function beep() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator(); const g = ctx.createGain();
     o.frequency.value = 880; g.gain.value = 0.1; o.connect(g); g.connect(ctx.destination);
     o.start(); o.stop(ctx.currentTime + 0.25);
   } catch {}
+}
+function notify(s) {
+  beep();
   if ('Notification' in window && Notification.permission === 'granted') {
     new Notification(`${s.action || 'تنبيه'} ${s.symbol || ''}`, { body: s.price != null ? 'الدخول: ' + fmtNum(s.price) : (s.note || '') });
   }

@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
+const news = require('./news');
 
 // ---------- Config ----------
 const PORT = Number(process.env.PORT || 3000);
@@ -17,6 +18,14 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const SESSION_DAYS = 30;
 const SINGLE_DEVICE = process.env.SINGLE_DEVICE !== 'false'; // one active login per user
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
+
+// Economic news alerts.
+const NEWS_FEED_URL = process.env.NEWS_FEED_URL || 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+const NEWS_CURRENCIES = (process.env.NEWS_CURRENCIES || 'USD').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+const NEWS_MIN_IMPACT = process.env.NEWS_MIN_IMPACT || 'High'; // High | Medium
+const NEWS_WARN_BEFORE_MIN = Number(process.env.NEWS_WARN_BEFORE_MIN || 60); // caution window before news
+const NEWS_WARN_AFTER_MIN = Number(process.env.NEWS_WARN_AFTER_MIN || 30); // caution window after news
+const NEWS_ALERT_MIN = Number(process.env.NEWS_ALERT_MIN || 30); // send alert this many minutes before
 
 // Partner (affiliate) brokers: a new member must open an account through one of these links.
 const BROKERS = [
@@ -69,6 +78,29 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,              -- feed | manual
+    ext_key TEXT UNIQUE,
+    title_en TEXT,
+    title_ar TEXT NOT NULL,
+    currency TEXT,
+    impact TEXT,
+    event_at INTEGER NOT NULL,
+    forecast TEXT,
+    previous TEXT,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    alerted INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS news_event_at ON news(event_at);
+`);
+{
+  const cols = db.prepare('PRAGMA table_info(signals)').all().map((c) => c.name);
+  if (!cols.includes('news')) db.exec('ALTER TABLE signals ADD COLUMN news TEXT'); // JSON: nearby news at signal time
+}
 
 // Migrations for the registration/approval flow.
 {
@@ -280,11 +312,87 @@ app.get('/api/telegram', requireActive, (req, res) => {
 });
 
 // ---------- Signals ----------
+function parseSignalRow(r) {
+  let n = [];
+  try { n = r.news ? JSON.parse(r.news) : []; } catch { n = []; }
+  return { ...r, news: n };
+}
 app.get('/api/signals', requireActive, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 500);
-  const rows = db.prepare('SELECT id, symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, created_at FROM signals ORDER BY id DESC LIMIT ?').all(limit);
-  res.json({ signals: rows });
+  const rows = db.prepare('SELECT id, symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, news, created_at FROM signals ORDER BY id DESC LIMIT ?').all(limit);
+  res.json({ signals: rows.map(parseSignalRow) });
 });
+
+// ---------- News ----------
+const newsPublic = (n) => ({
+  id: n.id, title: n.title_ar, title_en: n.title_en, currency: n.currency, impact: n.impact,
+  event_at: n.event_at, forecast: n.forecast, previous: n.previous, source: n.source,
+});
+function newsBetween(from, to) {
+  return db.prepare('SELECT * FROM news WHERE hidden = 0 AND event_at BETWEEN ? AND ? ORDER BY event_at').all(from, to);
+}
+// News that a signal at time t should be warned about.
+function newsNear(t) {
+  return newsBetween(t - NEWS_WARN_AFTER_MIN * 60000, t + NEWS_WARN_BEFORE_MIN * 60000)
+    .map((n) => ({ title: n.title_ar, event_at: n.event_at, impact: n.impact }));
+}
+
+app.get('/api/news', requireActive, (_req, res) => {
+  const t = now();
+  res.json({
+    news: newsBetween(t - DAY, t + 8 * DAY).map(newsPublic),
+    warn_before_min: NEWS_WARN_BEFORE_MIN,
+    warn_after_min: NEWS_WARN_AFTER_MIN,
+  });
+});
+
+let lastNewsFetch = { at: null, ok: null, count: 0, error: null };
+async function fetchNews() {
+  try {
+    const r = await fetch(NEWS_FEED_URL, { headers: { 'User-Agent': 'gold-signals/1.0' }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const items = news.parseFeed(await r.json(), { currencies: NEWS_CURRENCIES, minImpact: NEWS_MIN_IMPACT });
+    const keys = new Set(items.map((i) => i.ext_key));
+    const from = Math.min(...items.map((i) => i.event_at));
+    const to = Math.max(...items.map((i) => i.event_at));
+    db.exec('BEGIN');
+    try {
+      const upsert = db.prepare(`INSERT INTO news (source, ext_key, title_en, title_ar, currency, impact, event_at, forecast, previous, created_at)
+        VALUES ('feed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ext_key) DO UPDATE SET title_ar = excluded.title_ar, impact = excluded.impact,
+          forecast = excluded.forecast, previous = excluded.previous`);
+      for (const i of items) upsert.run(i.ext_key, i.title_en, i.title_ar, i.currency, i.impact, i.event_at, i.forecast, i.previous, now());
+      // Drop feed events in this range that disappeared (rescheduled/cancelled).
+      if (items.length) {
+        for (const row of db.prepare("SELECT id, ext_key FROM news WHERE source = 'feed' AND event_at BETWEEN ? AND ?").all(from, to)) {
+          if (!keys.has(row.ext_key)) db.prepare('DELETE FROM news WHERE id = ?').run(row.id);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    lastNewsFetch = { at: now(), ok: true, count: items.length, error: null };
+  } catch (e) {
+    lastNewsFetch = { at: now(), ok: false, count: 0, error: String(e.message || e) };
+    console.error('News fetch failed:', lastNewsFetch.error);
+  }
+  return lastNewsFetch;
+}
+if (NEWS_FEED_URL !== 'off') {
+  setTimeout(fetchNews, 2000).unref();
+  setInterval(fetchNews, 60 * 60 * 1000).unref();
+}
+
+// Alert subscribers NEWS_ALERT_MIN minutes before each news event.
+function checkNewsAlerts() {
+  const t = now();
+  const due = db.prepare('SELECT * FROM news WHERE hidden = 0 AND alerted = 0 AND event_at > ? AND event_at <= ?')
+    .all(t, t + NEWS_ALERT_MIN * 60000);
+  for (const n of due) {
+    db.prepare('UPDATE news SET alerted = 1 WHERE id = ?').run(n.id);
+    broadcast('news', newsPublic(n));
+  }
+}
+setInterval(checkNewsAlerts, 30000).unref();
 
 // Live updates via Server-Sent Events.
 const streams = new Set(); // { res, userId, expiresAt, isAdmin }
@@ -303,8 +411,8 @@ app.get('/api/stream', requireActive, (req, res) => {
   streams.add(entry);
   req.on('close', () => streams.delete(entry));
 });
-function broadcast(signal) {
-  const payload = `event: signal\ndata: ${JSON.stringify(signal)}\n\n`;
+function broadcast(event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   const t = now();
   for (const s of streams) {
     if (!s.isAdmin && !(s.expiresAt && s.expiresAt > t)) { s.res.end(); streams.delete(s); continue; }
@@ -341,13 +449,15 @@ app.post('/webhook/:secret', (req, res) => {
     note: body.note || body.message || body.comment ? String(body.note || body.message || body.comment).slice(0, 500) : null,
     created_at: now(),
   };
-  const r = db.prepare(`INSERT INTO signals (symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, raw, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  signal.news = newsNear(signal.created_at);
+  const r = db.prepare(`INSERT INTO signals (symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, news, raw, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     signal.symbol, signal.action, signal.price, signal.sl, signal.tp1, signal.tp2, signal.tp3,
-    signal.timeframe, signal.note, String(raw).slice(0, 5000), signal.created_at,
+    signal.timeframe, signal.note, signal.news.length ? JSON.stringify(signal.news) : null,
+    String(raw).slice(0, 5000), signal.created_at,
   );
   signal.id = Number(r.lastInsertRowid);
-  broadcast(signal);
+  broadcast('signal', signal);
   res.json({ ok: true, id: signal.id });
 });
 
@@ -431,6 +541,32 @@ app.delete('/api/admin/signals/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM signals WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
+
+// News management.
+app.get('/api/admin/news', requireAdmin, (_req, res) => {
+  const t = now();
+  const rows = db.prepare('SELECT * FROM news WHERE event_at > ? ORDER BY event_at').all(t - DAY);
+  res.json({ news: rows.map((n) => ({ ...newsPublic(n), hidden: !!n.hidden })), last_fetch: lastNewsFetch, feed: NEWS_FEED_URL !== 'off' });
+});
+app.post('/api/admin/news', requireAdmin, (req, res) => {
+  const title = String(req.body?.title || '').trim().slice(0, 200);
+  const eventAt = Number(req.body?.event_at);
+  const impact = ['High', 'Medium'].includes(req.body?.impact) ? req.body.impact : 'High';
+  if (!title) return res.status(400).json({ error: 'title_required' });
+  if (!Number.isFinite(eventAt)) return res.status(400).json({ error: 'invalid_time' });
+  const r = db.prepare(`INSERT INTO news (source, title_ar, currency, impact, event_at, created_at) VALUES ('manual', ?, 'USD', ?, ?, ?)`)
+    .run(title, impact, eventAt, now());
+  res.json({ news: newsPublic(db.prepare('SELECT * FROM news WHERE id = ?').get(Number(r.lastInsertRowid))) });
+});
+app.post('/api/admin/news/:id/hide', requireAdmin, (req, res) => {
+  const hidden = req.body?.hidden === false ? 0 : 1;
+  const id = Number(req.params.id);
+  const n = db.prepare('SELECT source FROM news WHERE id = ?').get(id);
+  if (n && n.source === 'manual' && hidden) db.prepare('DELETE FROM news WHERE id = ?').run(id);
+  else db.prepare('UPDATE news SET hidden = ? WHERE id = ?').run(hidden, id);
+  res.json({ ok: true });
+});
+app.post('/api/admin/news/refresh', requireAdmin, async (_req, res) => res.json({ last_fetch: await fetchNews() }));
 
 // Housekeeping: remove expired sessions hourly.
 setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 60 * 60 * 1000).unref();
