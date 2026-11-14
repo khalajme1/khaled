@@ -258,27 +258,36 @@ async function logout() {
 
 function signalCard(s, isNew) {
   const div = document.createElement('div');
-  const cls = (s.kind === 'entry' || !s.kind) && (s.action === 'BUY' || s.action === 'SELL') ? s.action : 'OTHER';
-  const side = s.action === 'BUY' ? 'شراء' : s.action === 'SELL' ? 'بيع' : '';
-  const actionText = s.kind === 'setup' ? `⏳ صفقة ${side} محتملة`
-    : s.kind === 'close' ? '✅ إغلاق الصفقة'
-    : s.kind === 'cancel' ? '✖️ إلغاء الصفقة المحتملة'
-    : s.action === 'BUY' ? 'شراء BUY' : s.action === 'SELL' ? 'بيع SELL' : (s.action || 'تنبيه');
-  div.className = 'card signal' + (isNew ? ' new' : '');
-  const lv = [['الدخول', s.price], ['وقف الخسارة', s.sl], ['هدف 1', s.tp1], ['هدف 2', s.tp2], ['هدف 3', s.tp3]]
-    .filter(([, v]) => v != null)
-    .map(([k, v]) => `<div class="lvl"><span>${k}</span><b>${fmtNum(v)}</b></div>`).join('');
+  const x = s.extra || {};
+  const cls = signalBadgeClass(s);
+  div.className = 'card signal' + (isNew ? ' new' : '') + (x.strong ? ' strong' : '');
+  const lvRows = s.kind === 'entry' || s.kind === 'setup' || s.kind === 'reinforce'
+    ? [['الدخول', s.price], ['وقف الخسارة', s.sl], ['هدف 1', s.tp1], ['هدف 2', s.tp2], ['هدف 3', s.tp3]]
+    : [['السعر', s.price]];
+  if ((s.kind === 'entry' || s.kind === 'setup') && Array.isArray(x.zones)) x.zones.forEach((z, i) => lvRows.push(['تعزيز ' + (i + 2), z]));
+  const lv = lvRows.filter(([, v]) => v != null)
+    .map(([k, v]) => `<div class="lvl${/تعزيز/.test(k) ? ' add' : ''}"><span>${k}</span><b>${fmtNum(v)}</b></div>`).join('');
   div.innerHTML = `
     <div>
-      <div class="row"><span class="badge ${cls}"></span><b class="ltr sym"></b><span class="muted tf"></span></div>
+      <div class="row"><span class="badge ${cls}"></span><b class="ltr sym"></b><span class="muted tf"></span><span class="mode-chip hidden"></span></div>
       ${lv ? `<div class="levels">${lv}</div>` : ''}
       <p class="note muted" style="margin:10px 0 0"></p>
     </div>
     <div class="muted" style="font-size:12px">${fmtDate(s.created_at)}</div>`;
-  div.querySelector('.badge').textContent = actionText;
+  div.querySelector('.badge').textContent = signalTitle(s, false);
   div.querySelector('.sym').textContent = s.symbol || '';
   div.querySelector('.tf').textContent = s.timeframe ? '· فريم ' + tfLabel(s.timeframe) : '';
+  const chip = modeChip(x.mode);
+  if (chip && (s.kind === 'entry' || s.kind === 'setup')) {
+    const c = div.querySelector('.mode-chip'); c.textContent = chip; c.classList.remove('hidden');
+  }
   div.querySelector('.note').textContent = s.note || (s.kind === 'setup' ? 'استعد — الدخول لم يتأكد بعد.' : '');
+  if (x.strong && (s.kind === 'entry' || s.kind === 'setup')) {
+    const w = document.createElement('div');
+    w.className = 'signal-news';
+    w.textContent = '⚠ صفقة قوي جداً: مخاطرة عالية، ممكن تكون سوينق وممكن تضرب الستوب.';
+    div.firstElementChild.appendChild(w);
+  }
   if (s.news && s.news.length) {
     const w = document.createElement('div');
     w.className = 'signal-news';
@@ -428,13 +437,7 @@ function beep() {
 function notify(s) {
   beep();
   if ('Notification' in window && Notification.permission === 'granted') {
-    const side = s.action === 'BUY' ? 'شراء' : s.action === 'SELL' ? 'بيع' : '';
-    const tf = s.timeframe ? ' على فريم ' + tfLabel(s.timeframe) : '';
-    const title = s.kind === 'setup' ? `⏳ استعد: صفقة ${side} محتملة${tf}`
-      : s.kind === 'close' ? `✅ إغلاق الصفقة${tf}`
-      : s.kind === 'cancel' ? `✖️ إلغاء الصفقة المحتملة${tf}`
-      : `${s.action === 'SELL' ? '🔴' : '🟢'} صفقة ${side}${tf}`;
-    new Notification(title, { body: s.price != null ? 'السعر: ' + fmtNum(s.price) : (s.note || '') });
+    new Notification(signalTitle(s, true), { body: s.note || (s.price != null ? 'السعر: ' + fmtNum(s.price) : '') });
   }
 }
 if ('Notification' in window && Notification.permission === 'granted') $('notifBtn').textContent = 'التنبيهات مفعّلة';

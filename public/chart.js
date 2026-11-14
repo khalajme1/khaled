@@ -7,6 +7,35 @@ const TF_LABELS = { '1': 'دقيقة', '3': '3 دقائق', '5': '5 دقائق',
 const tfLabel = (tf) => TF_LABELS[tf] || tf || '';
 const tfShort = (tf) => (/^\d+$/.test(String(tf)) ? tf + 'د' : tf);
 const sideAr = (a) => (a === 'BUY' ? 'شراء' : a === 'SELL' ? 'بيع' : '');
+
+// Title of a signal, for cards (withTf=false) and notifications (withTf=true).
+function signalTitle(s, withTf) {
+  const x = s.extra || {};
+  const side = sideAr(s.action);
+  const tf = withTf && s.timeframe ? ' على فريم ' + tfLabel(s.timeframe) : '';
+  const strong = x.strong ? ' قوي جداً' : '';
+  switch (s.kind) {
+    case 'setup': return `${x.strong ? '⚡' : ''}⏳ ${withTf ? 'استعد: ' : ''}صفقة ${side}${strong} محتملة${x.firstTouch ? ' (أول لمسة)' : ''}${tf}`;
+    case 'near': return `⚠ قرب ${side === 'شراء' ? 'الشراء' : 'البيع'}${x.distance != null ? ' · باقي ' + fmtNum(x.distance) + '$' : ''}${tf}`;
+    case 'reinforce': return `➕ تعزيز ${x.zone || ''} ${side}${tf}`;
+    case 'tp': return `✅ الهدف ${x.target || ''}${x.zone > 1 ? ' (تعزيز ' + x.zone + ')' : ''}${tf}`;
+    case 'cancel': return `✖️ إلغاء الصفقة المحتملة${tf}`;
+    case 'close': return (x.outcome === 'win' ? '🏁 تسكّرت الصفقة — ربح' : x.outcome === 'breakeven' ? '⚖ تسكّرت على الدخول' : x.outcome === 'loss' ? '🛑 تسكّرت الصفقة — خسارة' : '✅ إغلاق الصفقة') + (x.result ? ' ' + x.result : '') + tf;
+    case 'info': return ({
+      safe: '🛡 أكثر أمان: تسكّر اللي قبل التعزيز', breakeven: '🛡 الوقف على الدخول', exit: '🚪 خروج الباقي',
+      stop: '🛑 وقف', near_reinforce: '⏳ قرب التعزيز', day_target: '🎯 هدف اليوم تحقق', week_end: '📅 نهاية الأسبوع',
+    }[x.sub] || 'ℹ️ تحديث') + tf;
+    default: return `${x.strong ? '⚡' : ''}${s.action === 'SELL' ? '🔴' : '🟢'} ${withTf ? 'صفقة ' : ''}${side}${strong}${withTf ? '' : (s.action ? ' ' + s.action : '')}${tf}`;
+  }
+}
+function signalBadgeClass(s) {
+  if (s.kind === 'entry' || !s.kind) return s.action === 'BUY' ? 'BUY' : s.action === 'SELL' ? 'SELL' : 'OTHER';
+  if (s.kind === 'tp' || (s.kind === 'close' && (s.extra || {}).outcome === 'win')) return 'BUY';
+  if ((s.kind === 'info' && (s.extra || {}).sub === 'stop') || (s.kind === 'close' && (s.extra || {}).outcome === 'loss')) return 'SELL';
+  return 'OTHER';
+}
+const modeChip = (m) => (!m ? '' : /أمان/.test(m) ? '🛡 أكثر أمان' : /هدف اليوم/.test(m) ? '🎯 هدف اليوم' : /مضاربة/.test(m) ? 'مضاربة' : '');
+
 // Lightweight Charts shows UTC; shift bar times so the axis reads in the viewer's local time.
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
 const toChartTime = (ms) => Math.floor(ms / 1000) + TZ_SHIFT;
@@ -96,27 +125,39 @@ function renderTabs() {
   }
 }
 
-// One strip per frame: "get ready" for setups, "there is a trade" for entries.
+// One strip per open trade/setup: "get ready" for setups, "there is a trade on frame X" for entries.
 function renderTradeAlerts() {
   const box = $('tradeAlerts');
   box.innerHTML = '';
-  const live = liveTrades().sort((a, b) => (a.kind === b.kind ? b.id - a.id : a.kind === 'setup' ? -1 : 1));
+  const all = liveTrades();
+  const live = all.filter((x) => x.kind !== 'reinforce')
+    .sort((a, b) => (a.kind === b.kind ? b.id - a.id : a.kind === 'setup' ? -1 : 1));
   for (const x of live) {
+    const ex = x.extra || {};
     const el = document.createElement('button');
     const side = sideAr(x.action);
+    const strong = ex.strong ? ' قوي جداً' : '';
+    el.innerHTML = '<b></b><span></span>';
     if (x.kind === 'setup') {
-      el.className = 'ta setup';
-      el.innerHTML = '<b></b><span></span>';
-      el.querySelector('b').textContent = `⏳ استعد: صفقة ${side} محتملة على فريم ${tfLabel(x.timeframe)}`;
-      el.querySelector('span').textContent = (x.price != null ? `قرب ${fmtNum(x.price)} · ` : '') + 'انتظر تأكيد الدخول';
+      el.className = 'ta setup' + (ex.strong ? ' strong' : '');
+      el.querySelector('b').textContent = `${ex.strong ? '⚡' : ''}⏳ استعد: صفقة ${side}${strong} محتملة على فريم ${tfLabel(x.timeframe)}`;
+      el.querySelector('span').textContent = [
+        x.price != null && (ex.firstTouch ? 'أول لمسة عند ' : 'الدخول عند ') + fmtNum(x.price),
+        x.sl != null && 'الوقف ' + fmtNum(x.sl),
+        ex.strong ? '⚠ مخاطرة عالية' : 'انتظر وصول السعر',
+      ].filter(Boolean).join(' · ');
     } else {
-      el.className = 'ta entry ' + (x.action === 'SELL' ? 'sell' : 'buy');
-      el.innerHTML = '<b></b><span></span>';
-      el.querySelector('b').textContent = `${x.action === 'SELL' ? '🔴' : '🟢'} فيه صفقة ${side} على فريم ${tfLabel(x.timeframe)}`;
+      el.className = 'ta entry ' + (x.action === 'SELL' ? 'sell' : 'buy') + (ex.strong ? ' strong' : '');
+      el.querySelector('b').textContent = `${ex.strong ? '⚡' : ''}${x.action === 'SELL' ? '🔴' : '🟢'} فيه صفقة ${side}${strong} على فريم ${tfLabel(x.timeframe)}`;
+      const filled = all.filter((r) => r.kind === 'reinforce' && r.timeframe === x.timeframe && r.action === x.action && r.id > x.id)
+        .map((r) => (r.extra || {}).zone).filter(Boolean);
+      const hits = (ex.hits || {})['1'] || 0;
       el.querySelector('span').textContent = [
         x.price != null && 'الدخول ' + fmtNum(x.price),
         x.sl != null && 'الوقف ' + fmtNum(x.sl),
-        x.tp1 != null && 'الهدف ' + fmtNum(x.tp1),
+        hits ? '✓ هدف ' + hits : x.tp1 != null && 'الهدف ' + fmtNum(x.tp1),
+        filled.length ? '➕ تعزيز ' + filled.join('، ') : null,
+        modeChip(ex.mode),
         'منذ ' + fmtTime(x.created_at),
       ].filter(Boolean).join(' · ');
     }
@@ -137,11 +178,20 @@ function drawTradeOnChart() {
     C.lines.push(C.series.createPriceLine({ price, color, title, lineStyle: style, lineWidth: width, axisLabelVisible: true }));
   };
   if (entry) {
-    line(entry.price, '#d4af37', 'دخول ' + sideAr(entry.action), 0, 2);
+    const ex = entry.extra || {};
+    const hit = (ex.hits || {})['1'] || 0;
+    line(entry.price, '#d4af37', (ex.strong ? '⚡ ' : '') + 'دخول ' + sideAr(entry.action), 0, 2);
     line(entry.sl, '#ef4444', 'وقف الخسارة', 0, 1);
-    line(entry.tp1, '#22c55e', 'هدف 1', 2, 1);
-    line(entry.tp2, '#22c55e', 'هدف 2', 2, 1);
-    line(entry.tp3, '#22c55e', 'هدف 3', 2, 1);
+    line(entry.tp1, '#22c55e', (hit >= 1 ? '✓ ' : '') + 'هدف 1', 2, 1);
+    line(entry.tp2, '#22c55e', (hit >= 2 ? '✓ ' : '') + 'هدف 2', 2, 1);
+    line(entry.tp3, '#22c55e', (hit >= 3 ? '✓ ' : '') + 'هدف 3', 2, 1);
+    // Reinforcement (تعزيز) levels: dashed until filled, solid once the add-on is in.
+    const filled = live.filter((r) => r.kind === 'reinforce' && r.id > entry.id).map((r) => (r.extra || {}).zone);
+    (ex.zones || []).forEach((z, i) => {
+      const k = i + 2;
+      const on = filled.includes(k);
+      line(z, on ? '#60a5fa' : 'rgba(96,165,250,.55)', (on ? '➕ ' : '') + 'تعزيز ' + k, on ? 0 : 2, 1);
+    });
   }
   if (setup) {
     line(setup.price, '#e5b93b', 'دخول محتمل ' + sideAr(setup.action), 1, 1);

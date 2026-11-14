@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const news = require('./news');
+const q877 = require('./q877');
 
 // ---------- Config ----------
 const PORT = Number(process.env.PORT || 3000);
@@ -110,6 +111,8 @@ db.exec(`
   // status: active | triggered (setup became an entry) | closed | cancelled | expired
   if (!cols.includes('status')) db.exec("ALTER TABLE signals ADD COLUMN status TEXT NOT NULL DEFAULT 'closed'");
   if (!cols.includes('expires_at')) db.exec('ALTER TABLE signals ADD COLUMN expires_at INTEGER');
+  // extra (JSON): zones, step, strong, group, zone, target, hits, sub, outcome, result, mode...
+  if (!cols.includes('extra')) db.exec('ALTER TABLE signals ADD COLUMN extra TEXT');
 }
 db.exec(`
   CREATE TABLE IF NOT EXISTS candles (
@@ -332,8 +335,10 @@ app.get('/api/telegram', requireActive, (req, res) => {
 // ---------- Signals ----------
 function parseSignalRow(r) {
   let n = [];
+  let x = {};
   try { n = r.news ? JSON.parse(r.news) : []; } catch { n = []; }
-  return { ...r, news: n };
+  try { x = r.extra ? JSON.parse(r.extra) : {}; } catch { x = {}; }
+  return { ...r, news: n, extra: x };
 }
 app.get('/api/signals', requireActive, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 500);
@@ -342,7 +347,7 @@ app.get('/api/signals', requireActive, (req, res) => {
 });
 
 // ---------- Trades & chart ----------
-const SIGNAL_COLS = 'id, symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, expires_at, created_at';
+const SIGNAL_COLS = 'id, symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, extra, expires_at, created_at';
 
 function activeTrades() {
   return db.prepare(`SELECT ${SIGNAL_COLS} FROM signals
@@ -424,10 +429,15 @@ function signalKind(body) {
   const k = String(body.type ?? body.kind ?? body.event ?? '').trim().toLowerCase();
   if (['bar', 'candle'].includes(k)) return 'bar';
   if (['setup', 'prepare', 'pre', 'pending', 'soon', 'warning'].includes(k)) return 'setup';
-  if (['close', 'exit', 'tp', 'sl', 'closed'].includes(k)) return 'close';
+  if (['close', 'exit', 'sl', 'closed'].includes(k)) return 'close';
   if (['cancel', 'cancelled', 'canceled', 'invalid'].includes(k)) return 'cancel';
+  if (['reinforce', 'add', 'scale'].includes(k)) return 'reinforce';
+  if (['tp', 'target'].includes(k)) return 'tp';
+  if (k === 'near') return 'near';
+  if (k === 'info') return 'info';
   return 'entry';
 }
+const LIVE_KINDS = ['setup', 'entry', 'reinforce']; // kinds that stay "active" on the chart
 
 // Setups wait for the entry: active for ~2 bars (at least 3 minutes). Entries stay on the chart
 // until closed, replaced by a newer entry on the same frame, or ~40 bars (at least an hour).
@@ -435,8 +445,8 @@ function defaultExpiry(kind, tf, body) {
   const custom = num(body.expires_min);
   if (custom) return now() + custom * 60000;
   const m = tfMinutes(tf) || 15;
-  if (kind === 'setup') return now() + Math.max(3, m * 2) * 60000;
-  if (kind === 'entry') return now() + Math.max(60, m * 40) * 60000;
+  if (kind === 'setup') return now() + (body.source === 'q877' ? 240 : Math.max(3, m * 2)) * 60000;
+  if (kind === 'entry' || kind === 'reinforce') return now() + Math.max(60, m * 40) * 60000;
   return null;
 }
 
@@ -542,20 +552,12 @@ setInterval(() => { for (const s of streams) s.res.write(': ping\n\n'); }, 25000
 // Body: JSON (recommended) or plain text.
 app.post('/webhook/:secret', (req, res) => {
   if (!safeEqual(req.params.secret, WEBHOOK_SECRET)) return res.status(404).end();
-  const { body } = parsePayload(req.body);
-  if (signalKind(body) === 'bar') {
-    const r = handleBar(body);
-    return res.status(r.ok ? 200 : 400).json(r);
-  }
-  const signal = createSignal(req.body);
-  res.json({ ok: true, id: signal.id });
+  res.json(ingest(req.body));
 });
 
 // Admin: send a test signal without TradingView.
 app.post('/api/admin/test-signal', requireAdmin, (req, res) => {
-  const body = req.body || {};
-  if (signalKind(body) === 'bar') return res.json(handleBar(body));
-  res.json({ signal: createSignal(body) });
+  res.json(ingest(req.body || {}));
 });
 
 function parsePayload(input) {
@@ -567,8 +569,29 @@ function parsePayload(input) {
   return { body: body && typeof body === 'object' ? body : {}, raw };
 }
 
-function createSignal(input) {
-  const { body, raw } = parsePayload(input);
+// Every webhook body goes through here: a Q877 indicator alert (JSON with "text", or its plain text),
+// a price bar, or a plain signal.
+function ingest(input) {
+  const { body } = parsePayload(input);
+  const text = body.source === 'q877' ? body.text : q877.isQ877Text(body.note) ? body.note : null;
+  if (text != null) {
+    const tf = normalizeTf(body.timeframe ?? body.interval);
+    const symbol = body.symbol || 'XAUUSD';
+    const out = { ok: true, signals: [] };
+    if (body.bar) out.bar = handleBar({ ...body.bar, timeframe: tf, symbol });
+    for (const ev of q877.parseQ877(text)) {
+      out.signals.push(createSignal({ ...ev, timeframe: tf, symbol, mode: body.mode, source: 'q877' }, text).id);
+    }
+    return out;
+  }
+  if (signalKind(body) === 'bar') return handleBar(body);
+  const signal = createSignal(body, typeof input === 'string' ? input : JSON.stringify(input));
+  return { ok: true, id: signal.id, signal };
+}
+
+const EXTRA_KEYS = ['zones', 'step', 'strong', 'group', 'zone', 'target', 'sub', 'outcome', 'result', 'distance', 'firstTouch', 'mode', 'source'];
+
+function createSignal(body, raw) {
   const kind = signalKind(body);
 
   let action = String(body.action || body.side || body.signal || '').trim().toUpperCase();
@@ -588,29 +611,57 @@ function createSignal(input) {
     note: body.note || body.message || body.comment ? String(body.note || body.message || body.comment).slice(0, 500) : null,
     created_at: now(),
   };
-  signal.news = newsNear(signal.created_at);
-  signal.status = kind === 'setup' || kind === 'entry' ? 'active' : 'closed';
+  const extra = {};
+  for (const k of EXTRA_KEYS) if (body[k] !== undefined && body[k] !== null && body[k] !== '') extra[k] = body[k];
+  if (extra.mode) extra.mode = String(extra.mode).slice(0, 80);
+  if (Array.isArray(extra.zones)) extra.zones = extra.zones.map(num).filter((x) => x !== null).slice(0, 6);
+  // Reinforcement levels from the step when the alert gives only "add every X".
+  if (kind === 'entry' && !extra.zones && num(extra.step) && signal.price !== null && signal.action) {
+    const d = signal.action === 'BUY' ? 1 : -1;
+    extra.zones = [2, 3, 4].map((k) => +(signal.price - d * (k - 1) * extra.step).toFixed(2));
+  }
+  signal.extra = extra;
+  signal.news = ['setup', 'entry', 'near'].includes(kind) ? newsNear(signal.created_at) : [];
+  signal.status = LIVE_KINDS.includes(kind) ? 'active' : 'closed';
   signal.expires_at = defaultExpiry(kind, signal.timeframe, body);
 
-  // Earlier open setups/trades on the same frame: an entry triggers the setup and replaces older trades;
-  // a close/cancel ends them.
-  const sameTf = "symbol = ? AND IFNULL(timeframe, '') = IFNULL(?, '') AND status = 'active'";
+  // Update earlier active rows on the same symbol + frame.
+  const live = db.prepare(`SELECT id, kind, action, status, extra, expires_at FROM signals
+    WHERE status = 'active' AND symbol = ? AND IFNULL(timeframe, '') = IFNULL(?, '')`).all(signal.symbol, signal.timeframe)
+    .map((r) => ({ ...r, extra: r.extra ? JSON.parse(r.extra) : {} }));
+  const sameSide = (r) => !signal.action || !r.action || r.action === signal.action;
+  const sameTrade = (r) => (extra.group && r.extra.group ? r.extra.group === extra.group : !!r.extra.strong === !!extra.strong);
+  const setStatus = (rows, st) => rows.forEach((r) => db.prepare('UPDATE signals SET status = ? WHERE id = ?').run(st, r.id));
   if (kind === 'entry') {
-    db.prepare(`UPDATE signals SET status = 'triggered' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
-    db.prepare(`UPDATE signals SET status = 'closed' WHERE kind = 'entry' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+    setStatus(live.filter((r) => r.kind === 'setup' && sameSide(r) && !!r.extra.strong === !!extra.strong), 'triggered');
+    setStatus(live.filter((r) => (r.kind === 'entry' || r.kind === 'reinforce') && sameTrade(r)), 'closed');
   } else if (kind === 'setup') {
-    db.prepare(`UPDATE signals SET status = 'expired' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
-  } else if (kind === 'close') {
-    db.prepare(`UPDATE signals SET status = 'closed' WHERE kind = 'entry' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+    setStatus(live.filter((r) => r.kind === 'setup' && sameSide(r) && !!r.extra.strong === !!extra.strong), 'expired');
   } else if (kind === 'cancel') {
-    db.prepare(`UPDATE signals SET status = 'cancelled' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+    setStatus(live.filter((r) => r.kind === 'setup' && sameSide(r)), 'cancelled');
+  } else if (kind === 'close') {
+    setStatus(live.filter((r) => (r.kind === 'entry' || r.kind === 'reinforce') && sameTrade(r)), 'closed');
+  } else if (kind === 'reinforce') {
+    const parent = live.filter((r) => r.kind === 'entry' && sameSide(r)).pop();
+    if (parent && parent.expires_at) signal.expires_at = parent.expires_at;
+  } else if (kind === 'tp') {
+    // Remember which targets each zone reached, on the open trade.
+    const parent = live.filter((r) => r.kind === 'entry' && sameSide(r) && sameTrade(r)).pop();
+    if (parent && num(extra.target)) {
+      const hits = parent.extra.hits || {};
+      const z = String(extra.zone || 1);
+      hits[z] = Math.max(hits[z] || 0, extra.target);
+      parent.extra.hits = hits;
+      db.prepare('UPDATE signals SET extra = ? WHERE id = ?').run(JSON.stringify(parent.extra), parent.id);
+    }
   }
 
-  const r = db.prepare(`INSERT INTO signals (symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, expires_at, raw, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  const r = db.prepare(`INSERT INTO signals (symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, extra, expires_at, raw, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     signal.symbol, signal.action, signal.kind, signal.status, signal.price, signal.sl, signal.tp1, signal.tp2, signal.tp3,
     signal.timeframe, signal.note, signal.news.length ? JSON.stringify(signal.news) : null,
-    signal.expires_at, String(raw).slice(0, 5000), signal.created_at,
+    Object.keys(extra).length ? JSON.stringify(extra) : null,
+    signal.expires_at, String(raw ?? JSON.stringify(body)).slice(0, 5000), signal.created_at,
   );
   signal.id = Number(r.lastInsertRowid);
   broadcast('signal', signal);
