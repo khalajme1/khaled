@@ -9,6 +9,7 @@ const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const news = require('./news');
 const q877 = require('./q877');
+const { createPriceFeed } = require('./pricefeed');
 
 // ---------- Config ----------
 const PORT = Number(process.env.PORT || 3000);
@@ -31,7 +32,13 @@ const NEWS_ALERT_MIN = Number(process.env.NEWS_ALERT_MIN || 30); // send alert t
 // Chart: timeframes (minutes) shown as tabs. Candles arrive from the TradingView indicator ("bar" alerts);
 // 1-minute bars are also rolled up into the larger frames.
 const CHART_TIMEFRAMES = (process.env.CHART_TIMEFRAMES || '1,3,5,15').split(',').map((x) => x.trim()).filter(Boolean);
-const CANDLES_KEEP = Number(process.env.CANDLES_KEEP || 1500); // bars kept per timeframe
+const CANDLES_KEEP = Number(process.env.CANDLES_KEEP || 5000); // bars kept per timeframe
+
+// Live chart prices from Twelve Data (paid plan). When set, candle bars sent by the indicator are ignored.
+const TWELVEDATA_API_KEY = process.env.TWELVEDATA_API_KEY || '';
+const TWELVEDATA_SYMBOL = process.env.TWELVEDATA_SYMBOL || 'XAU/USD';
+const TWELVEDATA_WS = process.env.TWELVEDATA_WS !== 'false'; // false = REST polling
+const TWELVEDATA_POLL_SEC = Number(process.env.TWELVEDATA_POLL_SEC || 15);
 
 // Partner (affiliate) brokers: a new member must open an account through one of these links.
 const BROKERS = [
@@ -391,7 +398,7 @@ const upsertCandle = () => db.prepare(`INSERT INTO candles (tf, t, o, h, l, c) V
   ON CONFLICT(tf, t) DO UPDATE SET o = excluded.o, h = excluded.h, l = excluded.l, c = excluded.c`);
 
 // A price bar from TradingView: {"type":"bar","timeframe":"1","time":..., "open":..,"high":..,"low":..,"close":..}
-function handleBar(body) {
+function handleBar(body, { broadcast: send = true } = {}) {
   const tf = normalizeTf(body.timeframe ?? body.interval ?? '1');
   const mins = tfMinutes(tf);
   const o = num(body.open ?? body.o), h = num(body.high ?? body.h), l = num(body.low ?? body.l), c = num(body.close ?? body.c);
@@ -419,7 +426,7 @@ function handleBar(body) {
   }
   for (const u of updates) {
     db.prepare('DELETE FROM candles WHERE tf = ? AND t < ?').run(u.tf, u.bar.t - CANDLES_KEEP * (tfMinutes(u.tf) || 1) * 60000);
-    broadcast('candle', u);
+    if (send) broadcast('candle', u);
   }
   return { ok: true, updates: updates.length };
 }
@@ -578,13 +585,13 @@ function ingest(input) {
     const tf = normalizeTf(body.timeframe ?? body.interval);
     const symbol = body.symbol || 'XAUUSD';
     const out = { ok: true, signals: [] };
-    if (body.bar) out.bar = handleBar({ ...body.bar, timeframe: tf, symbol });
+    if (body.bar && !priceFeed) out.bar = handleBar({ ...body.bar, timeframe: tf, symbol });
     for (const ev of q877.parseQ877(text)) {
       out.signals.push(createSignal({ ...ev, timeframe: tf, symbol, mode: body.mode, source: 'q877' }, text).id);
     }
     return out;
   }
-  if (signalKind(body) === 'bar') return handleBar(body);
+  if (signalKind(body) === 'bar') return priceFeed ? { ok: true, ignored: 'price_feed_active' } : handleBar(body);
   const signal = createSignal(body, typeof input === 'string' ? input : JSON.stringify(input));
   return { ok: true, id: signal.id, signal };
 }
@@ -750,6 +757,12 @@ app.delete('/api/admin/signals/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// Where the chart's prices come from.
+app.get('/api/admin/price-feed', requireAdmin, (_req, res) => {
+  const last = db.prepare("SELECT MAX(t) AS t, COUNT(*) AS n FROM candles WHERE tf = '1'").get();
+  res.json({ feed: priceFeed ? priceFeed.status : { source: 'TradingView (المؤشر)' }, last_bar: last.t, bars_1m: last.n });
+});
+
 // News management.
 app.get('/api/admin/news', requireAdmin, (_req, res) => {
   const t = now();
@@ -779,9 +792,20 @@ app.post('/api/admin/news/refresh', requireAdmin, async (_req, res) => res.json(
 // Housekeeping: remove expired sessions hourly.
 setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 60 * 60 * 1000).unref();
 
+// ---------- Live price feed ----------
+const priceFeed = TWELVEDATA_API_KEY
+  ? createPriceFeed({
+    apiKey: TWELVEDATA_API_KEY, symbol: TWELVEDATA_SYMBOL, useWs: TWELVEDATA_WS, pollSec: TWELVEDATA_POLL_SEC,
+    onBar: (tf, b, opts) => handleBar({ timeframe: tf, time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }, opts),
+  })
+  : null;
+
 // ---------- Static frontend ----------
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vendor/lightweight-charts', express.static(path.join(__dirname, 'node_modules', 'lightweight-charts', 'dist')));
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  if (priceFeed) priceFeed.start().catch((e) => console.error('[price feed]', e));
+});

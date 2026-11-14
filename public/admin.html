@@ -28,6 +28,11 @@
   </div>
 
   <div class="card">
+    <h3 style="margin-top:0">📈 أسعار الشارت</h3>
+    <p id="feedInfo" class="muted" style="margin:0"></p>
+  </div>
+
+  <div class="card">
     <h3 style="margin-top:0">🧪 صفقة تجريبية</h3>
     <p class="muted" style="margin-top:0">ترسل صفقة لكل المشتركين كأنها جاية من TradingView — للتجربة.</p>
     <form id="testForm" class="grid2">
@@ -244,8 +249,18 @@ $('testForm').addEventListener('submit', async (e) => {
   }) });
   $('testMsg').textContent = status === 200 ? '✅ تم الإرسال — افتح صفحة الصفقات وشوفها.' : 'حدث خطأ';
 });
+async function loadFeed() {
+  const { data } = await api('/api/admin/price-feed');
+  const f = data.feed || {};
+  const ago = (t) => (t ? Math.round((Date.now() - t) / 1000) + ' ثانية' : '—');
+  $('feedInfo').textContent = f.source === 'Twelve Data'
+    ? `المصدر: Twelve Data (${f.symbol}) · ${f.mode === 'websocket' ? 'مباشر' : 'تحديث كل فترة'} · ${f.connected ? '🟢 متصل' : '🔴 غير متصل'} · آخر سعر ${f.lastPrice ?? '—'} قبل ${ago(f.lastTick)}` + (f.lastError ? ` · ⚠ ${f.lastError}` : '')
+    : `المصدر: مؤشر TradingView (شمعة كل دقيقة) · آخر شمعة قبل ${ago(data.last_bar ? data.last_bar + 60000 : null)}`;
+}
+setInterval(loadFeed, 10000);
 load();
 loadNews();
+loadFeed();
 </script>
 </body>
 </html>

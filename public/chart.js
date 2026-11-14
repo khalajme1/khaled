@@ -98,7 +98,7 @@ async function selectTf(tf, byHand) {
   if (byHand) C.pickedAt = Date.now();
   renderTabs();
   initChart();
-  const { data } = await api('/api/candles?tf=' + encodeURIComponent(tf) + '&limit=500');
+  const { data } = await api('/api/candles?tf=' + encodeURIComponent(tf) + '&limit=1500');
   if (C.tf !== tf) return; // another tab was picked meanwhile
   C.candles = (data && data.candles) || [];
   if (C.series) {
