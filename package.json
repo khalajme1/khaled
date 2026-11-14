@@ -18,7 +18,8 @@
   },
   "homepage": "https://github.com/khalajme1/khaled#readme",
   "dependencies": {
-    "express": "^4.22.3"
+    "express": "^4.22.3",
+    "lightweight-charts": "4.2.3"
   },
   "private": true,
   "engines": {

@@ -47,24 +47,59 @@ npm start
    https://your-domain.com/webhook/<WEBHOOK_SECRET>
    ```
    (الويبهوك يحتاج اشتراك TradingView مدفوع وتفعيل التحقق الثنائي 2FA).
-3. في خانة **Message** حط JSON. أفضل طريقة من داخل كود Pine Script:
+3. سوّ **4 تنبيهات**، واحد على كل فريم (دقيقة، 3، 5، 15)، وكل واحد بشرط **"Any alert() function call"** ونفس رابط الويبهوك.
+4. ضيف هذا في آخر كود المؤشر (Pine v5). غيّر `buyCond` و `sellCond` و `slLevel` و `tp1..tp3` لأسماء المتغيرات اللي في مؤشرك:
 ```pine
-if buySignal
-    alert('{"symbol":"' + syminfo.ticker + '","action":"BUY","price":' + str.tostring(close) +
-          ',"sl":' + str.tostring(slLevel) + ',"tp1":' + str.tostring(tp1) +
-          ',"tp2":' + str.tostring(tp2) + ',"tp3":' + str.tostring(tp3) +
-          ',"timeframe":"' + timeframe.period + '"}', alert.freq_once_per_bar_close)
-if sellSignal
-    alert('{"symbol":"' + syminfo.ticker + '","action":"SELL","price":' + str.tostring(close) +
-          ',"sl":' + str.tostring(slLevel) + ',"tp1":' + str.tostring(tp1) + '}', alert.freq_once_per_bar_close)
-```
-   وبعدها تسوي Alert بشرط **"Any alert() function call"**.
+f_msg(string kind, string side, float sl, float t1, float t2, float t3) =>
+    '{"type":"' + kind + '","symbol":"' + syminfo.ticker + '","action":"' + side +
+      '","price":' + str.tostring(close) + ',"sl":' + str.tostring(sl) +
+      ',"tp1":' + str.tostring(t1) + ',"tp2":' + str.tostring(t2) + ',"tp3":' + str.tostring(t3) +
+      ',"timeframe":"' + timeframe.period + '"}'
 
-   أو لو تستخدم `alertcondition`، حط بالرسالة:
-   ```
-   {"symbol":"{{ticker}}","action":"BUY","price":{{close}},"timeframe":"{{interval}}"}
-   ```
-الحقول المدعومة: `symbol`, `action` (BUY/SELL/LONG/SHORT), `price`, `sl`, `tp1`, `tp2`, `tp3`, `timeframe`, `note`. أي رسالة نص عادي تنعرض كتنبيه.
+// (1) أسعار الشارت: كل شمعة دقيقة تنقفل تنرسل للموقع (من تنبيه فريم الدقيقة بس)
+if barstate.isconfirmed and timeframe.period == "1"
+    alert('{"type":"bar","symbol":"' + syminfo.ticker + '","timeframe":"1","time":' + str.tostring(time) +
+          ',"open":' + str.tostring(open) + ',"high":' + str.tostring(high) +
+          ',"low":' + str.tostring(low) + ',"close":' + str.tostring(close) + '}', alert.freq_all)
+
+// (2) قبل الدخول: الشرط ظهر على الشمعة الحالية (قبل ما تنقفل) = تنبيه "استعد"
+// (3) الدخول: الشمعة انقفلت والشرط متحقق = "فيه صفقة على فريم ..."
+// وإذا ظهر التنبيه واختفى الشرط قبل الإغلاق = إلغاء
+varip bool buySent = false
+varip bool sellSent = false
+if not barstate.isconfirmed
+    if buyCond and not buySent
+        buySent := true
+        alert(f_msg("setup", "BUY", slLevel, na, na, na), alert.freq_all)
+    if sellCond and not sellSent
+        sellSent := true
+        alert(f_msg("setup", "SELL", slLevel, na, na, na), alert.freq_all)
+else
+    if buyCond
+        alert(f_msg("entry", "BUY", slLevel, tp1, tp2, tp3), alert.freq_all)
+    else if buySent
+        alert(f_msg("cancel", "BUY", na, na, na, na), alert.freq_all)
+    if sellCond
+        alert(f_msg("entry", "SELL", slLevel, tp1, tp2, tp3), alert.freq_all)
+    else if sellSent
+        alert(f_msg("cancel", "SELL", na, na, na, na), alert.freq_all)
+    buySent := false
+    sellSent := false
+```
+   ولإغلاق الصفقة (لما يضرب الهدف أو الوقف) أرسل `"type":"close"` بنفس الطريقة.
+
+### أنواع الرسائل (`type`)
+| النوع | وش يسوي في الموقع |
+|---|---|
+| `setup` | تنبيه أصفر فوق الشارت: "⏳ استعد: صفقة شراء محتملة على فريم 5 دقائق" + خط "دخول محتمل" على الشارت. يختفي لحاله بعد شمعتين إذا ما صار دخول |
+| `entry` (الافتراضي) | تنبيه أخضر/أحمر: "🟢 فيه صفقة شراء على فريم 5 دقائق" + خطوط الدخول والوقف والأهداف وسهم على الشمعة. الشارت ينتقل لفريم الصفقة تلقائياً |
+| `close` | إغلاق الصفقة وإزالة خطوطها |
+| `cancel` | إلغاء التنبيه المحتمل |
+| `bar` | شمعة سعر للشارت (`time`, `open`, `high`, `low`, `close`). شموع الدقيقة تنبني منها 3 و 5 و 15 تلقائياً |
+
+الحقول: `symbol`, `action` (BUY/SELL), `price`, `sl`, `tp1`, `tp2`, `tp3`, `timeframe` (يقبل `1` أو `1m` أو `5`...), `note`, `expires_min` (مدة بقاء التنبيه بالدقائق، اختياري).
+
+**ملاحظة عن الشارت:** الأسعار تجي من نفس شارت TradingView اللي عليه المؤشر، فخطوط الصفقة تطابق الشموع بالضبط. الشارت يبدأ يتعبى من لحظة تشغيل التنبيه (ما فيه تاريخ قبل كذا)، وبعد ساعة تقريباً يكون فيه شموع كافية. الشارت مبني بمكتبة TradingView Lightweight Charts (مجانية).
 
 ## تنبيهات الأخبار المؤثرة على الذهب
 - السيرفر يسحب كل ساعة تقويم الأخبار الاقتصادية للأسبوع، ويختار الأخبار **القوية** للدولار الأمريكي، ويترجم أسماءها للعربي (التضخم CPI، الوظائف NFP، قرار الفائدة، خطاب رئيس الفيدرالي...).

@@ -27,6 +27,11 @@ const NEWS_WARN_BEFORE_MIN = Number(process.env.NEWS_WARN_BEFORE_MIN || 60); // 
 const NEWS_WARN_AFTER_MIN = Number(process.env.NEWS_WARN_AFTER_MIN || 30); // caution window after news
 const NEWS_ALERT_MIN = Number(process.env.NEWS_ALERT_MIN || 30); // send alert this many minutes before
 
+// Chart: timeframes (minutes) shown as tabs. Candles arrive from the TradingView indicator ("bar" alerts);
+// 1-minute bars are also rolled up into the larger frames.
+const CHART_TIMEFRAMES = (process.env.CHART_TIMEFRAMES || '1,3,5,15').split(',').map((x) => x.trim()).filter(Boolean);
+const CANDLES_KEEP = Number(process.env.CANDLES_KEEP || 1500); // bars kept per timeframe
+
 // Partner (affiliate) brokers: a new member must open an account through one of these links.
 const BROKERS = [
   { id: 'exness', name: 'Exness', url: 'https://one.exnessonelink.com/a/7w3b6fma5a' },
@@ -100,7 +105,20 @@ db.exec(`
 {
   const cols = db.prepare('PRAGMA table_info(signals)').all().map((c) => c.name);
   if (!cols.includes('news')) db.exec('ALTER TABLE signals ADD COLUMN news TEXT'); // JSON: nearby news at signal time
+  // kind: setup (trade coming) | entry (trade opened) | close | cancel
+  if (!cols.includes('kind')) db.exec("ALTER TABLE signals ADD COLUMN kind TEXT NOT NULL DEFAULT 'entry'");
+  // status: active | triggered (setup became an entry) | closed | cancelled | expired
+  if (!cols.includes('status')) db.exec("ALTER TABLE signals ADD COLUMN status TEXT NOT NULL DEFAULT 'closed'");
+  if (!cols.includes('expires_at')) db.exec('ALTER TABLE signals ADD COLUMN expires_at INTEGER');
 }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS candles (
+    tf TEXT NOT NULL,
+    t INTEGER NOT NULL,                -- bar open time, ms
+    o REAL NOT NULL, h REAL NOT NULL, l REAL NOT NULL, c REAL NOT NULL,
+    PRIMARY KEY (tf, t)
+  );
+`);
 
 // Migrations for the registration/approval flow.
 {
@@ -319,9 +337,108 @@ function parseSignalRow(r) {
 }
 app.get('/api/signals', requireActive, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 500);
-  const rows = db.prepare('SELECT id, symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, news, created_at FROM signals ORDER BY id DESC LIMIT ?').all(limit);
+  const rows = db.prepare(`SELECT ${SIGNAL_COLS} FROM signals ORDER BY id DESC LIMIT ?`).all(limit);
   res.json({ signals: rows.map(parseSignalRow) });
 });
+
+// ---------- Trades & chart ----------
+const SIGNAL_COLS = 'id, symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, expires_at, created_at';
+
+function activeTrades() {
+  return db.prepare(`SELECT ${SIGNAL_COLS} FROM signals
+    WHERE status = 'active' AND (expires_at IS NULL OR expires_at > ?) ORDER BY id`).all(now()).map(parseSignalRow);
+}
+app.get('/api/trades/active', requireActive, (_req, res) => {
+  res.json({ trades: activeTrades(), timeframes: CHART_TIMEFRAMES });
+});
+
+app.get('/api/candles', requireActive, (req, res) => {
+  const tf = normalizeTf(req.query.tf) || CHART_TIMEFRAMES[0];
+  const limit = Math.min(Number(req.query.limit) || 500, CANDLES_KEEP);
+  const rows = db.prepare('SELECT t, o, h, l, c FROM candles WHERE tf = ? ORDER BY t DESC LIMIT ?').all(tf, limit).reverse();
+  res.json({ tf, candles: rows });
+});
+
+// "1", "1m", "M5", "5min", "15" -> "1" / "5" / "15"; "60"/"1h" -> "60"; "D"/"1D" -> "D".
+function normalizeTf(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const s = String(v).trim().toLowerCase();
+  let m = s.match(/^(\d+)\s*(m|min|mins|minute|minutes)?$/) || s.match(/^m(\d+)$/);
+  if (m) return String(Number(m[1]));
+  m = s.match(/^(\d+)\s*h$/) || s.match(/^h(\d+)$/);
+  if (m) return String(Number(m[1]) * 60);
+  if (/^1?d$/.test(s)) return 'D';
+  if (/^1?w$/.test(s)) return 'W';
+  return s.slice(0, 10).toUpperCase();
+}
+const tfMinutes = (tf) => (/^\d+$/.test(String(tf)) ? Number(tf) : null);
+
+function parseTime(v, fallback) {
+  if (typeof v === 'number' || /^\d+$/.test(String(v ?? ''))) {
+    const n = Number(v);
+    return n < 1e12 ? n * 1000 : n; // seconds or ms
+  }
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : fallback;
+}
+
+const upsertCandle = () => db.prepare(`INSERT INTO candles (tf, t, o, h, l, c) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(tf, t) DO UPDATE SET o = excluded.o, h = excluded.h, l = excluded.l, c = excluded.c`);
+
+// A price bar from TradingView: {"type":"bar","timeframe":"1","time":..., "open":..,"high":..,"low":..,"close":..}
+function handleBar(body) {
+  const tf = normalizeTf(body.timeframe ?? body.interval ?? '1');
+  const mins = tfMinutes(tf);
+  const o = num(body.open ?? body.o), h = num(body.high ?? body.h), l = num(body.low ?? body.l), c = num(body.close ?? body.c);
+  if (!mins || [o, h, l, c].some((x) => x === null)) return { ok: false, error: 'invalid_bar' };
+  const span = mins * 60000;
+  const t = Math.floor(parseTime(body.time ?? body.t, now() - span) / span) * span;
+  upsertCandle().run(tf, t, o, h, l, c);
+  const updates = [{ tf, bar: { t, o, h, l, c } }];
+
+  // Roll 1-minute bars up into the larger chart frames (keeps the forming bar live).
+  if (tf === '1') {
+    for (const big of CHART_TIMEFRAMES) {
+      const n = tfMinutes(big);
+      if (!n || n <= 1) continue;
+      const bucket = Math.floor(t / (n * 60000)) * n * 60000;
+      const ones = db.prepare("SELECT o, h, l, c FROM candles WHERE tf = '1' AND t >= ? AND t < ? ORDER BY t").all(bucket, bucket + n * 60000);
+      if (!ones.length) continue;
+      const bar = {
+        t: bucket, o: ones[0].o, c: ones[ones.length - 1].c,
+        h: Math.max(...ones.map((x) => x.h)), l: Math.min(...ones.map((x) => x.l)),
+      };
+      upsertCandle().run(big, bar.t, bar.o, bar.h, bar.l, bar.c);
+      updates.push({ tf: big, bar });
+    }
+  }
+  for (const u of updates) {
+    db.prepare('DELETE FROM candles WHERE tf = ? AND t < ?').run(u.tf, u.bar.t - CANDLES_KEEP * (tfMinutes(u.tf) || 1) * 60000);
+    broadcast('candle', u);
+  }
+  return { ok: true, updates: updates.length };
+}
+
+// Signal kind from the alert's "type" field.
+function signalKind(body) {
+  const k = String(body.type ?? body.kind ?? body.event ?? '').trim().toLowerCase();
+  if (['bar', 'candle'].includes(k)) return 'bar';
+  if (['setup', 'prepare', 'pre', 'pending', 'soon', 'warning'].includes(k)) return 'setup';
+  if (['close', 'exit', 'tp', 'sl', 'closed'].includes(k)) return 'close';
+  if (['cancel', 'cancelled', 'canceled', 'invalid'].includes(k)) return 'cancel';
+  return 'entry';
+}
+
+// Setups wait for the entry: active for ~2 bars (at least 3 minutes). Entries stay on the chart
+// until closed, replaced by a newer entry on the same frame, or ~40 bars (at least an hour).
+function defaultExpiry(kind, tf, body) {
+  const custom = num(body.expires_min);
+  if (custom) return now() + custom * 60000;
+  const m = tfMinutes(tf) || 15;
+  if (kind === 'setup') return now() + Math.max(3, m * 2) * 60000;
+  if (kind === 'entry') return now() + Math.max(60, m * 40) * 60000;
+  return null;
+}
 
 // ---------- News ----------
 const newsPublic = (n) => ({
@@ -425,22 +542,34 @@ setInterval(() => { for (const s of streams) s.res.write(': ping\n\n'); }, 25000
 // Body: JSON (recommended) or plain text.
 app.post('/webhook/:secret', (req, res) => {
   if (!safeEqual(req.params.secret, WEBHOOK_SECRET)) return res.status(404).end();
+  const { body } = parsePayload(req.body);
+  if (signalKind(body) === 'bar') {
+    const r = handleBar(body);
+    return res.status(r.ok ? 200 : 400).json(r);
+  }
   const signal = createSignal(req.body);
   res.json({ ok: true, id: signal.id });
 });
 
 // Admin: send a test signal without TradingView.
 app.post('/api/admin/test-signal', requireAdmin, (req, res) => {
-  res.json({ signal: createSignal(req.body || {}) });
+  const body = req.body || {};
+  if (signalKind(body) === 'bar') return res.json(handleBar(body));
+  res.json({ signal: createSignal(body) });
 });
 
-function createSignal(input) {
+function parsePayload(input) {
   let body = input;
-  let raw = typeof body === 'string' ? body : JSON.stringify(body);
+  const raw = typeof body === 'string' ? body : JSON.stringify(body);
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch { body = { note: body }; }
   }
-  body = body && typeof body === 'object' ? body : {};
+  return { body: body && typeof body === 'object' ? body : {}, raw };
+}
+
+function createSignal(input) {
+  const { body, raw } = parsePayload(input);
+  const kind = signalKind(body);
 
   let action = String(body.action || body.side || body.signal || '').trim().toUpperCase();
   if (['LONG', 'BUY'].includes(action)) action = 'BUY';
@@ -454,19 +583,38 @@ function createSignal(input) {
     tp1: num(body.tp1 ?? body.tp),
     tp2: num(body.tp2),
     tp3: num(body.tp3),
-    timeframe: body.timeframe || body.interval ? String(body.timeframe || body.interval).slice(0, 10) : null,
+    timeframe: normalizeTf(body.timeframe ?? body.interval),
+    kind,
     note: body.note || body.message || body.comment ? String(body.note || body.message || body.comment).slice(0, 500) : null,
     created_at: now(),
   };
   signal.news = newsNear(signal.created_at);
-  const r = db.prepare(`INSERT INTO signals (symbol, action, price, sl, tp1, tp2, tp3, timeframe, note, news, raw, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    signal.symbol, signal.action, signal.price, signal.sl, signal.tp1, signal.tp2, signal.tp3,
+  signal.status = kind === 'setup' || kind === 'entry' ? 'active' : 'closed';
+  signal.expires_at = defaultExpiry(kind, signal.timeframe, body);
+
+  // Earlier open setups/trades on the same frame: an entry triggers the setup and replaces older trades;
+  // a close/cancel ends them.
+  const sameTf = "symbol = ? AND IFNULL(timeframe, '') = IFNULL(?, '') AND status = 'active'";
+  if (kind === 'entry') {
+    db.prepare(`UPDATE signals SET status = 'triggered' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+    db.prepare(`UPDATE signals SET status = 'closed' WHERE kind = 'entry' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+  } else if (kind === 'setup') {
+    db.prepare(`UPDATE signals SET status = 'expired' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+  } else if (kind === 'close') {
+    db.prepare(`UPDATE signals SET status = 'closed' WHERE kind = 'entry' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+  } else if (kind === 'cancel') {
+    db.prepare(`UPDATE signals SET status = 'cancelled' WHERE kind = 'setup' AND ${sameTf}`).run(signal.symbol, signal.timeframe);
+  }
+
+  const r = db.prepare(`INSERT INTO signals (symbol, action, kind, status, price, sl, tp1, tp2, tp3, timeframe, note, news, expires_at, raw, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    signal.symbol, signal.action, signal.kind, signal.status, signal.price, signal.sl, signal.tp1, signal.tp2, signal.tp3,
     signal.timeframe, signal.note, signal.news.length ? JSON.stringify(signal.news) : null,
-    String(raw).slice(0, 5000), signal.created_at,
+    signal.expires_at, String(raw).slice(0, 5000), signal.created_at,
   );
   signal.id = Number(r.lastInsertRowid);
   broadcast('signal', signal);
+  broadcast('trades', { trades: activeTrades() });
   return signal;
 }
 
@@ -582,6 +730,7 @@ setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(no
 
 // ---------- Static frontend ----------
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/vendor/lightweight-charts', express.static(path.join(__dirname, 'node_modules', 'lightweight-charts', 'dist')));
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

@@ -31,8 +31,17 @@
     <h3 style="margin-top:0">🧪 صفقة تجريبية</h3>
     <p class="muted" style="margin-top:0">ترسل صفقة لكل المشتركين كأنها جاية من TradingView — للتجربة.</p>
     <form id="testForm" class="grid2">
+      <div><label>المرحلة</label><select id="tKind">
+        <option value="setup">تنبيه قبل الدخول (صفقة محتملة)</option>
+        <option value="entry" selected>دخول الصفقة</option>
+        <option value="close">إغلاق الصفقة</option>
+        <option value="cancel">إلغاء الصفقة المحتملة</option>
+      </select></div>
+      <div><label>الفريم</label><select id="tTf">
+        <option value="1">دقيقة</option><option value="3">3 دقائق</option><option value="5" selected>5 دقائق</option><option value="15">15 دقيقة</option>
+      </select></div>
       <div><label>النوع</label><select id="tAction"><option value="BUY">شراء BUY</option><option value="SELL">بيع SELL</option></select></div>
-      <div><label>الدخول</label><input id="tPrice" type="number" step="any" required class="ltr"></div>
+      <div><label>الدخول</label><input id="tPrice" type="number" step="any" class="ltr"></div>
       <div><label>وقف الخسارة</label><input id="tSl" type="number" step="any" class="ltr"></div>
       <div><label>هدف 1</label><input id="tTp1" type="number" step="any" class="ltr"></div>
       <div><label>هدف 2</label><input id="tTp2" type="number" step="any" class="ltr"></div>
@@ -231,7 +240,7 @@ $('testForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const v = (id) => $(id).value === '' ? undefined : Number($(id).value);
   const { status } = await api('/api/admin/test-signal', { method: 'POST', body: JSON.stringify({
-    symbol: 'XAUUSD', action: $('tAction').value, price: v('tPrice'), sl: v('tSl'), tp1: v('tTp1'), tp2: v('tTp2'), timeframe: '15',
+    symbol: 'XAUUSD', type: $('tKind').value, action: $('tAction').value, price: v('tPrice'), sl: v('tSl'), tp1: v('tTp1'), tp2: v('tTp2'), timeframe: $('tTf').value,
   }) });
   $('testMsg').textContent = status === 200 ? '✅ تم الإرسال — افتح صفحة الصفقات وشوفها.' : 'حدث خطأ';
 });

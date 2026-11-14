@@ -116,6 +116,17 @@
       </div>
       <div id="newsList" style="margin-top:8px"></div>
     </div>
+    <div class="card chart-card">
+      <div class="row" style="justify-content:space-between">
+        <b id="chartTitle">XAUUSD</b>
+        <div id="tfTabs" class="tf-tabs" role="group" aria-label="الفريم"></div>
+      </div>
+      <div id="tradeAlerts" class="trade-alerts"></div>
+      <div class="chart-box" dir="ltr">
+        <div id="chart" class="chart"></div>
+        <div id="chartEmpty" class="chart-empty hidden" dir="rtl">الشارت يظهر أول ما توصل أسعار الذهب من مؤشر TradingView.</div>
+      </div>
+    </div>
     <div id="tgCard" class="card hidden">
       <b>قنوات التليقرام</b>
       <div id="tgLinks" class="broker-links" style="margin-top:10px"></div>
@@ -124,6 +135,8 @@
     <p id="empty" class="muted hidden" style="text-align:center">لا توجد صفقات بعد.</p>
   </div>
 
+<script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+<script src="/chart.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let me = null;
@@ -172,6 +185,7 @@ async function init() {
   await loadSignals();
   loadTelegram();
   loadNews();
+  loadChartData();
   connect();
 }
 
@@ -244,8 +258,12 @@ async function logout() {
 
 function signalCard(s, isNew) {
   const div = document.createElement('div');
-  const cls = s.action === 'BUY' || s.action === 'SELL' ? s.action : 'OTHER';
-  const actionText = s.action === 'BUY' ? 'شراء BUY' : s.action === 'SELL' ? 'بيع SELL' : (s.action || 'تنبيه');
+  const cls = (s.kind === 'entry' || !s.kind) && (s.action === 'BUY' || s.action === 'SELL') ? s.action : 'OTHER';
+  const side = s.action === 'BUY' ? 'شراء' : s.action === 'SELL' ? 'بيع' : '';
+  const actionText = s.kind === 'setup' ? `⏳ صفقة ${side} محتملة`
+    : s.kind === 'close' ? '✅ إغلاق الصفقة'
+    : s.kind === 'cancel' ? '✖️ إلغاء الصفقة المحتملة'
+    : s.action === 'BUY' ? 'شراء BUY' : s.action === 'SELL' ? 'بيع SELL' : (s.action || 'تنبيه');
   div.className = 'card signal' + (isNew ? ' new' : '');
   const lv = [['الدخول', s.price], ['وقف الخسارة', s.sl], ['هدف 1', s.tp1], ['هدف 2', s.tp2], ['هدف 3', s.tp3]]
     .filter(([, v]) => v != null)
@@ -259,8 +277,8 @@ function signalCard(s, isNew) {
     <div class="muted" style="font-size:12px">${fmtDate(s.created_at)}</div>`;
   div.querySelector('.badge').textContent = actionText;
   div.querySelector('.sym').textContent = s.symbol || '';
-  div.querySelector('.tf').textContent = s.timeframe ? '· ' + s.timeframe : '';
-  div.querySelector('.note').textContent = s.note || '';
+  div.querySelector('.tf').textContent = s.timeframe ? '· فريم ' + tfLabel(s.timeframe) : '';
+  div.querySelector('.note').textContent = s.note || (s.kind === 'setup' ? 'استعد — الدخول لم يتأكد بعد.' : '');
   if (s.news && s.news.length) {
     const w = document.createElement('div');
     w.className = 'signal-news';
@@ -322,8 +340,11 @@ function connect() {
     const s = JSON.parse(ev.data);
     $('signals').prepend(signalCard(s, true));
     $('empty').classList.add('hidden');
+    chartOnSignal(s);
     notify(s);
   });
+  es.addEventListener('trades', (ev) => chartOnTrades(JSON.parse(ev.data).trades));
+  es.addEventListener('candle', (ev) => chartOnCandle(JSON.parse(ev.data)));
 }
 
 function enableNotifications() {
@@ -407,7 +428,13 @@ function beep() {
 function notify(s) {
   beep();
   if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification(`${s.action || 'تنبيه'} ${s.symbol || ''}`, { body: s.price != null ? 'الدخول: ' + fmtNum(s.price) : (s.note || '') });
+    const side = s.action === 'BUY' ? 'شراء' : s.action === 'SELL' ? 'بيع' : '';
+    const tf = s.timeframe ? ' على فريم ' + tfLabel(s.timeframe) : '';
+    const title = s.kind === 'setup' ? `⏳ استعد: صفقة ${side} محتملة${tf}`
+      : s.kind === 'close' ? `✅ إغلاق الصفقة${tf}`
+      : s.kind === 'cancel' ? `✖️ إلغاء الصفقة المحتملة${tf}`
+      : `${s.action === 'SELL' ? '🔴' : '🟢'} صفقة ${side}${tf}`;
+    new Notification(title, { body: s.price != null ? 'السعر: ' + fmtNum(s.price) : (s.note || '') });
   }
 }
 if ('Notification' in window && Notification.permission === 'granted') $('notifBtn').textContent = 'التنبيهات مفعّلة';
