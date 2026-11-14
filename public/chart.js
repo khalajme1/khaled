@@ -49,6 +49,7 @@ const C = {
   chart: null,
   series: null,
   lines: [],
+  lineVals: [], // prices of the drawn trade lines, kept inside the visible range
   pickedAt: 0, // when the viewer last picked a tab by hand
 };
 
@@ -70,6 +71,11 @@ function initChart() {
   });
   C.series = C.chart.addCandlestickSeries({
     upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+    autoscaleInfoProvider: (orig) => {
+      const r = orig();
+      if (!r || !C.lineVals.length) return r;
+      return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...C.lineVals) - 0.5, maxValue: Math.max(r.priceRange.maxValue, ...C.lineVals) + 0.5 } };
+    },
   });
 }
 
@@ -170,11 +176,13 @@ function drawTradeOnChart() {
   if (!C.series) return;
   for (const l of C.lines) C.series.removePriceLine(l);
   C.lines = [];
+  C.lineVals = [];
   const live = liveTrades().filter((x) => x.timeframe === C.tf);
   const entry = live.filter((x) => x.kind === 'entry').pop();
   const setup = live.filter((x) => x.kind === 'setup').pop();
   const line = (price, color, title, style = 0, width = 1) => {
     if (price == null) return;
+    C.lineVals.push(price);
     C.lines.push(C.series.createPriceLine({ price, color, title, lineStyle: style, lineWidth: width, axisLabelVisible: true }));
   };
   if (entry) {
